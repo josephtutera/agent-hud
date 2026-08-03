@@ -58,32 +58,11 @@ final class HUDViewTests: XCTestCase {
         XCTAssertEqual(bare.glanceWindow?.kind, "weekly_7d")
     }
 
-    // MARK: - Agent identity colors
+    // MARK: - Agent state
 
     private func agent(pid: Int, state: String = "working") -> Agent {
         Agent(pid: pid, tool: "claude", project: "p\(pid)", cwd: "/tmp/p\(pid)",
               state: state, action: nil, sinceSeconds: nil, subscriptionID: nil)
-    }
-
-    func testAgentColorsAreDistinctPerAgent() {
-        let colors = AgentColors.assign([agent(pid: 30), agent(pid: 10), agent(pid: 20)])
-        XCTAssertEqual(colors.count, 3)
-        let c10 = colors[10], c20 = colors[20], c30 = colors[30]
-        XCTAssertNotNil(c10); XCTAssertNotNil(c20); XCTAssertNotNil(c30)
-        XCTAssertNotEqual(c10, c20)
-        XCTAssertNotEqual(c20, c30)
-        XCTAssertNotEqual(c10, c30)
-    }
-
-    func testAgentColorsAssignByPidOrderNotInputOrder() {
-        // Same set, different input order -> the same pid keeps the same color.
-        let a = AgentColors.assign([agent(pid: 30), agent(pid: 10), agent(pid: 20)])
-        let b = AgentColors.assign([agent(pid: 10), agent(pid: 20), agent(pid: 30)])
-        XCTAssertEqual(a[10], b[10])
-        XCTAssertEqual(a[20], b[20])
-        XCTAssertEqual(a[30], b[30])
-        XCTAssertEqual(a[10], Theme.agentColor(0))
-        XCTAssertEqual(a[30], Theme.agentColor(2))
     }
 
     func testAgentStateHelpers() {

@@ -81,10 +81,11 @@ def _fake_agents() -> list[RunningAgent]:
 
 def test_snapshot_has_frozen_top_level_shape():
     snap = build_snapshot(_fake_usages(), _now(), _fake_agents())
-    assert snap["version"] == 1
+    assert snap["version"] == 2
     # generated_at is ISO8601 with an offset
     assert datetime.fromisoformat(snap["generated_at"]).tzinfo is not None
-    assert set(snap) == {"version", "generated_at", "subscriptions", "agents", "value", "soonest_reset"}
+    assert set(snap) == {"version", "generated_at", "subscriptions", "agents",
+                         "value", "soonest_reset", "setup"}
     # opencode is BYOK, never a subscription
     assert [s["provider"] for s in snap["subscriptions"]] == ["claude", "codex"]
 
@@ -416,7 +417,7 @@ def test_hud_endpoint_serves_the_snapshot(running_server: str):
         assert resp.headers["Content-Type"] == "application/json"
         assert resp.headers["Access-Control-Allow-Origin"] == "*"
         snap = json.loads(resp.read().decode())
-    assert snap["version"] == 1
+    assert snap["version"] == 2
     assert [s["provider"] for s in snap["subscriptions"]] == ["claude", "codex"]
     assert len(snap["agents"]) == 2
 
@@ -424,7 +425,7 @@ def test_hud_endpoint_serves_the_snapshot(running_server: str):
 def test_health_endpoint(running_server: str):
     with urllib.request.urlopen(f"{running_server}/v1/health", timeout=5) as resp:
         assert resp.status == 200
-        assert json.loads(resp.read().decode()) == {"ok": True, "version": 1}
+        assert json.loads(resp.read().decode()) == {"ok": True, "version": 2}
 
 
 def test_unknown_path_404s(running_server: str):
@@ -452,3 +453,51 @@ def test_non_loopback_bind_is_refused(monkeypatch: pytest.MonkeyPatch):
 def test_non_loopback_bind_allowed_with_env_override(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(serve_module._ALLOW_REMOTE_ENV, "1")
     serve_module._ensure_loopback("0.0.0.0")  # must not raise
+
+
+# ---------------------------------------------------------------- setup block
+
+
+def test_snapshot_carries_the_setup_block():
+    setup = {"version": 1, "generated_at": "x", "problems": 2, "sections": []}
+    snap = build_snapshot(_fake_usages(), _now(), [], setup=setup)
+    assert snap["version"] == 2
+    assert snap["setup"] == setup
+
+
+def test_setup_is_null_when_the_question_could_not_be_asked():
+    """None is not "healthy". It has to reach the app as null so the card can say
+    it does not know, instead of showing an all-clear nobody established."""
+    snap = build_snapshot(_fake_usages(), _now(), [], setup=None)
+    assert "setup" in snap and snap["setup"] is None
+
+
+def test_a_non_serializable_setup_block_degrades_to_null():
+    """The block comes from another repo's script. Whatever it hands back must
+    not be able to take the snapshot write down with it."""
+    snap = build_snapshot(_fake_usages(), _now(), [], setup={"sections": {1, 2}})
+    assert snap["setup"] is None
+    json.dumps(snap)  # must not raise
+
+
+def test_daemon_polls_setup_and_folds_it_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    setup = {"version": 1, "generated_at": "x", "problems": 0, "sections": []}
+    monkeypatch.setattr(serve_module, "collect_setup", lambda: setup)
+    daemon = HudDaemon(cache_path=tmp_path / "hud.json")
+    daemon.poll_setup_once()
+    assert daemon.snapshot()["setup"] == setup
+
+
+def test_a_failed_setup_poll_clears_the_block_rather_than_keeping_the_last_good_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Setup health is a claim about right now. Holding yesterday's all-clear
+    while the check is unavailable is exactly the false green this must avoid."""
+    good = {"version": 1, "generated_at": "x", "problems": 0, "sections": []}
+    answers = [good, None]
+    monkeypatch.setattr(serve_module, "collect_setup", lambda: answers.pop(0))
+    daemon = HudDaemon(cache_path=tmp_path / "hud.json")
+    daemon.poll_setup_once()
+    assert daemon.snapshot()["setup"] == good
+    daemon.poll_setup_once()
+    assert daemon.snapshot()["setup"] is None

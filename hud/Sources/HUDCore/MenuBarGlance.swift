@@ -42,9 +42,28 @@ public struct MenuBarContentView: View {
                         .foregroundStyle(tint.opacity(0.35))
                 }
             }
+            if showsSetupDot {
+                // One dot, and nothing at all when the setup is clean. The menu
+                // bar is where you are not looking, so it may say "come look" and
+                // nothing more; the count and the detail are one click away. A
+                // setup the daemon could not check shows nothing either: an
+                // unanswered question is not worth a permanent mark.
+                Circle()
+                    .fill(tint)
+                    .frame(width: 5, height: 5)
+                    .accessibilityLabel("agent setup has problems")
+            }
         }
         .padding(.horizontal, 5)
         .frame(height: 22)
+    }
+
+    /// True only for real problems. A setup the daemon could not check shows
+    /// nothing: an unanswered question is not worth a permanent mark, and a dot
+    /// that is always there trains the eye to stop seeing it.
+    public var showsSetupDot: Bool {
+        guard let setup = snapshot?.setup else { return false }
+        return !setup.isClean
     }
 }
 

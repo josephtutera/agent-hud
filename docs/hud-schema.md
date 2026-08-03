@@ -1,15 +1,18 @@
-# HUD snapshot schema (v1)
+# HUD snapshot schema (v2)
 
 The `agenthud serve` daemon maintains one JSON snapshot of subscription usage and
 live agent activity. It is written atomically to `~/.cache/agenthud/hud.json` on
 every meaningful change and served over a loopback HTTP API. This document is the
-contract for the Swift HUD app: the field names below are frozen for v1 and will
-not be renamed.
+contract for the Swift HUD app: the field names below are frozen and will not be
+renamed.
+
+**v2** added the `setup` block. Everything from v1 is unchanged, and `setup` is
+optional on the reading side, so a v1 snapshot still decodes.
 
 ## Serving it
 
 - `GET /v1/hud` returns the snapshot as `application/json`.
-- `GET /v1/health` returns `{"ok": true, "version": 1}`.
+- `GET /v1/health` returns `{"ok": true, "version": 2}`.
 - Any other path returns `404`.
 - The server binds loopback only (default `127.0.0.1:8737`). CORS is permissive
   (`Access-Control-Allow-Origin: *`) because only localhost can reach it anyway.
@@ -30,28 +33,33 @@ Run it with `agenthud serve` (or `agenthud --serve`), optionally with `--host` a
   single resident poller.
 - Live activity (running agents and their state) polls every 2 seconds, since it
   is cheap on-disk reads plus one `ps`.
+- Setup health polls every 60 seconds. It shells out to `~/.agents/bin/check-setup.sh`,
+  which is well under a second but not free, and drift arrives at the speed of a
+  person editing a config file.
 
 ## Top-level shape
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "generated_at": "2026-07-21T18:04:05.123456+00:00",
   "subscriptions": [ ... ],
   "agents": [ ... ],
   "value": { ... } | null,
-  "soonest_reset": { ... } | null
+  "soonest_reset": { ... } | null,
+  "setup": { ... } | null
 }
 ```
 
 | field | type | meaning |
 |---|---|---|
-| `version` | int | Schema version. Always `1` for this contract. |
+| `version` | int | Schema version. `2` for this contract. |
 | `generated_at` | ISO8601 string with offset | When this snapshot was built (UTC). |
 | `subscriptions` | array | One entry per Claude account plus Codex. OpenCode is BYOK, not a subscription, so it never appears here. |
 | `agents` | array | Every running claude / codex / opencode terminal session detected right now. |
 | `value` | object or null | Dollar value delivered vs. subscription cost. `null` when the pricing collector is unavailable. |
 | `soonest_reset` | object or null | The single earliest-resetting window across all subscriptions, or `null` when no window reports a reset time. |
+| `setup` | object or null | Whether the shared agent setup in `~/.agents` is healthy, verbatim from `check-setup.sh --json`. `null` means the question could not be asked — **never that the setup is fine**. |
 
 ## `subscriptions[]`
 
@@ -167,3 +175,56 @@ and a per-subscription breakdown keyed by subscription id.
 The earliest upcoming window reset across every subscription, so the HUD can show
 a single "next reset" without walking the whole tree. `null` when nothing reports
 a reset time.
+
+## `setup`
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-08-03T01:23:32+00:00",
+  "problems": 2,
+  "sections": [
+    {
+      "title": "every Claude account behaves the same",
+      "label": "accounts",
+      "summary": "model",
+      "status": "problem",
+      "results": [
+        {
+          "status": "problem",
+          "message": ".claude-team differs from ~/.claude in: model",
+          "fix": "decide which is right, apply it to both, then",
+          "fix_command": "bin/capture.sh"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Passed through verbatim from `~/.agents/bin/check-setup.sh --json`, which is the
+same gate a human runs in a terminal. The daemon deliberately performs no checks
+of its own: two implementations would eventually disagree about what healthy
+means, and the HUD is the one nobody re-derives. `version` here is the
+check-setup contract's own, independent of the snapshot's.
+
+| field | type | meaning |
+|---|---|---|
+| `problems` | int | How many results across all sections are problems. |
+| `sections[].title` | string | The full sentence the terminal prints. |
+| `sections[].label` | string | A short name for one row in a panel, e.g. `accounts`. |
+| `sections[].summary` | string | The section's roll-up: `12 on PATH` when it is fine, or what went wrong (`model`, `3 files`) when it is not. |
+| `sections[].status` | `"ok"` \| `"problem"` | `problem` when any result in the section is. |
+| `results[].message` | string | The line the terminal prints for this result. |
+| `results[].fix` | string | The prose part of the fix, possibly empty. |
+| `results[].fix_command` | string | The runnable part, split out so a reader can offer it as copyable. Empty when the fix is prose all the way through. |
+
+`null` rather than an object whenever the question could not be asked: no script,
+a script that predates `--json`, a crash, a hang, or output that is not the
+contract. **A reader must render `null` as unknown, not as healthy.** A green
+panel that is really "we could not ask" is worse than no panel, and the daemon
+clears the block on a failed poll rather than holding the last good answer, so
+the card can never show yesterday's all-clear.
+
+The check exiting non-zero is *success*: exit 1 is how it reports problems. Only
+exit 2, its own "I could not run", produces a `null` block.
