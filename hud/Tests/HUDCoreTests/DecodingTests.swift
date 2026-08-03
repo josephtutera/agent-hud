@@ -45,7 +45,7 @@ final class DecodingTests: XCTestCase {
     func testNullAndZeroFieldsDecode() throws {
         let snap = try HUDSnapshot.decode(from: loadFixtureData())
 
-        let personal = try XCTUnwrap(snap.subscriptions.first { $0.id == "claude-personal" })
+        let personal = try XCTUnwrap(snap.subscriptions.first { $0.id == "claude-max" })
         let fable = try XCTUnwrap(personal.windows.first { $0.kind == "weekly_fable" })
         XCTAssertEqual(fable.pctLeft, 0)
         XCTAssertTrue(fable.isLimitReached)

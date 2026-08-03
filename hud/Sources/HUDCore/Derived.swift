@@ -99,6 +99,15 @@ public enum AgentColors {
 }
 
 extension HUDSnapshot {
+    /// The subscriptions in presentation order: every Claude plan first, in the
+    /// order the daemon discovered them (the default config tree leads), then
+    /// Codex. Deliberately not a hardcoded list of ids — ids now come from
+    /// whichever organizations this machine is signed into, so a fixed list
+    /// would silently drop any subscription it had not been told about.
+    public var orderedSubscriptions: [Subscription] {
+        subscriptions.filter { $0.provider != "codex" } + subscriptions.filter { $0.provider == "codex" }
+    }
+
     public var waitingAgentCount: Int {
         agents.filter { $0.isWaiting }.count
     }

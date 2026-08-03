@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from subscriptions import claude_profiles, claude_subscriptions
+
 try:  # tomllib is stdlib from 3.11; on 3.10 we simply can't read the sub costs
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - depends on interpreter version
@@ -44,9 +46,10 @@ PRICING_CACHE_VERSION = 1  # bump to invalidate the per-file scan cache on forma
 # to this so real spend still lands somewhere priceable rather than being dropped.
 DEFAULT_CODEX_MODEL = "gpt-5.6"
 
-# subscription ids used throughout the report and the config file
-SUB_CLAUDE_TEAM = "claude-team"
-SUB_CLAUDE_PERSONAL = "claude-personal"
+# Codex has one account per machine, so its id is a constant. The Claude ids are
+# not: they come from the organization each config tree is signed into, via
+# subscriptions.py, so the value block and the quota bars agree on what to call
+# a subscription.
 SUB_CODEX = "codex"
 
 
@@ -307,22 +310,21 @@ def _parse_claude_file(path: Path) -> _ParsedFile:
     return {"rows": _aggregate_rows(rows), "costs": [[d, c] for d, c in costs.items()]}
 
 
-def _claude_account_dirs(home: Path | None = None) -> list[tuple[str, Path]]:
-    """(subscription_id, projects_dir) for each Claude account with sessions.
+def _claude_account_dirs(home: Path | None = None) -> list[tuple[str, list[Path]]]:
+    """(subscription_id, projects_dirs) for each Claude subscription with sessions.
 
-    The default ~/.claude is the Team account; each sibling ~/.claude-<name>
-    maps to a "claude-<name>" id, so ~/.claude-personal -> "claude-personal".
+    Keyed on the organization, exactly as the live usage collector is, so the
+    value block and the quota bars name the same subscriptions. Two config trees
+    signed into one organization spend one budget, so their transcripts are
+    scanned into a single figure rather than reported as two.
     """
     home = Path(home) if home else Path.home()
-    out: list[tuple[str, Path]] = []
-    default = home / ".claude" / "projects"
-    if default.is_dir():
-        out.append((SUB_CLAUDE_TEAM, default))
-    for d in sorted(home.glob(".claude-*")):
-        projects = d / "projects"
-        if projects.is_dir():
-            suffix = d.name[len(".claude-"):] or d.name
-            out.append((f"claude-{suffix}", projects))
+    out: list[tuple[str, list[Path]]] = []
+    for sub in claude_subscriptions(claude_profiles(home)):
+        dirs = [p.config_dir / "projects" for p in sub.profiles]
+        dirs = [d for d in dirs if d.is_dir()]
+        if dirs:
+            out.append((sub.id, dirs))
     return out
 
 
@@ -573,10 +575,10 @@ def collect_value(
 
     scan_cache = _load_scan_cache(cache_dir) if use_cache else {"claude": {}, "codex": {}}
 
-    # ---- Claude: one SubValue per account dir ----
+    # ---- Claude: one SubValue per subscription, across all its trees ----
     subs: list[SubValue] = []
-    for sub_id, projects_dir in _claude_account_dirs(home):
-        files = sorted(projects_dir.glob("*/*.jsonl"))
+    for sub_id, projects_dirs in _claude_account_dirs(home):
+        files = sorted(f for d in projects_dirs for f in d.glob("*/*.jsonl"))
         parsed = _parse_with_cache(files, _parse_claude_file, scan_cache["claude"])
         by_date = _price_parsed(parsed, resolver)
         subs.append(_sub_from_dates(sub_id, by_date, today, month_prefix))

@@ -6,6 +6,7 @@
       "id": "claude-team",
       "provider": "claude",
       "label": "Claude Team",
+      "trees": ["~/.claude-team"],
       "windows": [
         {
           "kind": "session_5h",
@@ -29,9 +30,10 @@
       "active_agents": 2
     },
     {
-      "id": "claude-personal",
+      "id": "claude-max",
       "provider": "claude",
-      "label": "Claude Personal",
+      "label": "Claude Max",
+      "trees": ["~/.claude"],
       "windows": [
         { "kind": "session_5h", "pct_left": 74, "resets_at": "2026-07-21T14:53:00Z", "pace": null },
         { "kind": "weekly_7d", "pct_left": 88, "resets_at": "2026-07-26T13:41:00Z", "pace": null },
@@ -101,7 +103,7 @@
     "multiple": 12.6,
     "by_sub": {
       "claude-team": { "today_usd": 120.0, "month_usd": 2100.0 },
-      "claude-personal": { "today_usd": 22.0, "month_usd": 480.0 },
+      "claude-max": { "today_usd": 22.0, "month_usd": 480.0 },
       "codex": { "today_usd": 40.0, "month_usd": 560.0 }
     }
   },

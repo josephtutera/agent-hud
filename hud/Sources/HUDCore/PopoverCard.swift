@@ -18,11 +18,8 @@ public struct PopoverCard: View {
         self.now = now
     }
 
-    private static let order = ["claude-team", "claude-personal", "codex"]
-
     private var orderedSubs: [Subscription] {
-        guard let snap = snapshot else { return [] }
-        return Self.order.compactMap { id in snap.subscriptions.first { $0.id == id } }
+        snapshot?.orderedSubscriptions ?? []
     }
 
     public var body: some View {

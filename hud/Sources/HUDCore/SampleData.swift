@@ -22,6 +22,7 @@ extension HUDSnapshot {
             id: "claude-team",
             provider: "claude",
             label: "Claude Team",
+            trees: ["~/.claude-team"],
             windows: [
                 Window(kind: "session_5h", pctLeft: 18, resetsAt: at(126),
                        pace: Pace(projectedDryAt: at(41), marginSeconds: 85 * 60)),
@@ -32,9 +33,10 @@ extension HUDSnapshot {
             activeAgents: 2
         )
         let personal = Subscription(
-            id: "claude-personal",
+            id: "claude-max",
             provider: "claude",
-            label: "Claude Personal",
+            label: "Claude Max",
+            trees: ["~/.claude"],
             windows: [
                 Window(kind: "session_5h", pctLeft: 74, resetsAt: at(72), pace: nil),
                 Window(kind: "weekly_7d", pctLeft: 88, resetsAt: at(5 * 24 * 60), pace: nil),
@@ -47,7 +49,7 @@ extension HUDSnapshot {
         let codex = Subscription(
             id: "codex",
             provider: "codex",
-            label: "Codex Max",
+            label: "Codex Pro",
             windows: [
                 Window(kind: "session_5h", pctLeft: 52, resetsAt: at(38), pace: nil),
                 Window(kind: "weekly", pctLeft: 43, resetsAt: at(3 * 24 * 60 + 8 * 60), pace: nil),
@@ -83,7 +85,7 @@ extension HUDSnapshot {
             multiple: 12.6,
             bySub: [
                 "claude-team": SubValue(todayUSD: 120, monthUSD: 2100),
-                "claude-personal": SubValue(todayUSD: 22, monthUSD: 480),
+                "claude-max": SubValue(todayUSD: 22, monthUSD: 480),
                 "codex": SubValue(todayUSD: 40, monthUSD: 560),
             ]
         )

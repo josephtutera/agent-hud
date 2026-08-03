@@ -26,7 +26,8 @@ from pathlib import Path
 
 from activity import enrich
 from agents import running_agents
-from usage import claude_profiles, collect_usage
+from subscriptions import claude_profiles, subscription_index
+from usage import collect_usage
 
 # Live activity is cheap (file reads + one ps); usage hits a rate-limited API and
 # barely moves between reads, so it stays slow and leans on usage.py's own cache.
@@ -69,39 +70,19 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
 
 
-def _claude_id(profile) -> str:
-    """Stable subscription id for a Claude profile. The built-in ~/.claude is
-    the team account ("claude-team"); a sibling ~/.claude-<name> keeps its
-    suffix ("claude-personal", "claude-work")."""
-    if getattr(profile, "default", False):
-        return "claude-team"
-    name = profile.config_dir.name
-    suffix = name[len(".claude-"):] if name.startswith(".claude-") else profile.label
-    return f"claude-{suffix or profile.label}"
+def _codex_label(usage) -> str:
+    return f"Codex {usage.plan}".strip() if usage.plan else "Codex"
 
 
-def _sub_id_for_usage(usage, profiles) -> str:
-    """The subscription id a ToolUsage belongs to. Single-account Claude has no
-    label and is always the default dir; multi-account matches the profile whose
-    label the usage carries so the default's org-derived label still maps to
-    'claude-team'."""
-    if usage.tool == "codex":
-        return "codex"
-    if not usage.label:
-        return "claude-team"
-    for profile in profiles:
-        if profile.label == usage.label:
-            return _claude_id(profile)
-    return f"claude-{usage.label}"
-
-
-def _sub_label(sub_id: str, usage) -> str:
-    if usage.tool == "codex":
-        return f"Codex {usage.plan}".strip() if usage.plan else "Codex"
-    if sub_id == "claude-team":
-        return "Claude Team"
-    name = sub_id[len("claude-"):]
-    return "Claude " + name.replace("-", " ").title()
+def _claude_identity(usage, index) -> tuple[str, str, list[str]]:
+    """(id, label, trees) for a Claude reading, resolved through the config tree
+    it came from. A reading with no matching tree — no profiles were passed, or
+    the machine changed under us mid-poll — is still reported, unattributed,
+    rather than dropped or guessed onto somebody else's subscription."""
+    sub = index.get(usage.config_dir)
+    if sub is None:
+        return "claude", f"Claude {usage.plan}".strip() if usage.plan else "Claude", []
+    return sub.id, sub.label, sub.trees
 
 
 def _window_kind(provider: str, label: str) -> str:
@@ -167,18 +148,19 @@ def _elapsed_seconds(text: str) -> int | None:
     return total if matched else None
 
 
-def _agent_sub_id(agent, profiles) -> str | None:
+def _agent_sub_id(agent, profiles, index) -> str | None:
     """The subscription an agent is spending against, when determinable. Codex
     agents are always the codex subscription; a Claude agent is matched to the
-    account whose config dir holds its per-pid session file; everything else
-    (opencode, unresolved) is null."""
+    tree whose config dir holds its per-pid session file, and from there to that
+    tree's subscription; everything else (opencode, unresolved) is null."""
     if agent.tool == "codex":
         return "codex"
     if agent.tool != "claude":
         return None
     for profile in profiles:
         if (profile.config_dir / "sessions" / f"{agent.pid}.json").exists():
-            return _claude_id(profile)
+            sub = index.get(str(profile.config_dir))
+            return sub.id if sub else None
     return None
 
 
@@ -233,11 +215,59 @@ def _collect_value() -> dict | None:
 # ---------------------------------------------------------------- snapshot
 
 
+def _subscription_entry(usage, sub_id, label, trees, now, soonest) -> tuple[dict, tuple | None]:
+    """One subscription entry, plus the earliest reset seen while building it.
+    `soonest` is threaded through rather than closed over so this stays pure."""
+    windows_out = []
+    tightest_pair = None  # (window dict, source UsageWindow)
+    for win in usage.windows:
+        kind = _window_kind(usage.tool, win.label)
+        pct_left = _pct_left(win.pct)
+        entry = {"kind": kind, "pct_left": pct_left, "resets_at": _iso(win.resets_at), "pace": None}
+        windows_out.append(entry)
+        if pct_left is not None and (tightest_pair is None or pct_left < tightest_pair[0]["pct_left"]):
+            tightest_pair = (entry, win)
+        if win.resets_at is not None and (soonest is None or win.resets_at < soonest[0]):
+            soonest = (win.resets_at, sub_id, kind)
+
+    tightest = None
+    if tightest_pair is not None:
+        entry, win = tightest_pair
+        entry["pace"] = _pace(win.pct, win.resets_at, entry["kind"], now)
+        tightest = {"kind": entry["kind"], "pct_left": entry["pct_left"], "resets_at": entry["resets_at"]}
+
+    return {
+        "id": sub_id,
+        "provider": usage.tool,
+        "label": label,
+        "trees": trees,
+        "windows": windows_out,
+        "tightest": tightest,
+        "stale": _stale_text(usage),
+        "active_agents": 0,  # filled once agents are resolved
+    }, soonest
+
+
+def _pick_reading(existing, candidate):
+    """Which of two readings for the same subscription to show. They are the
+    same organization polled through two trees, so the numbers agree; what can
+    differ is whether one of them is a cached fallback. A fresh reading always
+    beats a stale one, so one tree sitting in a rate-limit cooldown cannot make
+    a subscription look old when the other tree just read it cleanly."""
+    if existing["stale"] and not candidate["stale"]:
+        return candidate
+    return existing
+
+
 def build_snapshot(usages, fetched_at, agents, value=None, profiles=None) -> dict:
     """Fold collector outputs into a v1 HUD snapshot dict. Pure given its args:
-    pass the Claude `profiles` list to resolve multi-account subscription ids
-    (an empty list is fine for single-account setups). No credentials ever land
-    in the returned dict.
+    pass the Claude `profiles` list so each reading can be attributed to the
+    subscription its config tree belongs to. No credentials ever land in the
+    returned dict.
+
+    Two trees signed into one organization are one subscription with one quota,
+    so they collapse into a single entry naming both trees; two trees on
+    different organizations stay apart even when the same person owns both.
 
     The burn projection is anchored to `fetched_at` (when the usage was read),
     not wall-clock time, so a rebuild triggered by an activity poll reuses the
@@ -245,44 +275,31 @@ def build_snapshot(usages, fetched_at, agents, value=None, profiles=None) -> dic
     generated_at = datetime.now(timezone.utc)
     now = fetched_at or generated_at  # pace/reset math uses the reading's own timestamp
     profiles = profiles or []
+    index = subscription_index(profiles)
 
-    subscriptions = []
+    subscriptions: list[dict] = []
+    by_id: dict[str, dict] = {}
     soonest = None  # (resets_at dt, sub_id, kind)
     for usage in usages:
         if usage.tool not in ("claude", "codex"):
             continue  # opencode is BYOK, not a subscription
-        sub_id = _sub_id_for_usage(usage, profiles)
-        windows_out = []
-        tightest_pair = None  # (window dict, source UsageWindow)
-        for win in usage.windows:
-            kind = _window_kind(usage.tool, win.label)
-            pct_left = _pct_left(win.pct)
-            entry = {"kind": kind, "pct_left": pct_left, "resets_at": _iso(win.resets_at), "pace": None}
-            windows_out.append(entry)
-            if pct_left is not None and (tightest_pair is None or pct_left < tightest_pair[0]["pct_left"]):
-                tightest_pair = (entry, win)
-            if win.resets_at is not None and (soonest is None or win.resets_at < soonest[0]):
-                soonest = (win.resets_at, sub_id, kind)
+        if usage.tool == "codex":
+            sub_id, label, trees = "codex", _codex_label(usage), []
+        else:
+            sub_id, label, trees = _claude_identity(usage, index)
 
-        tightest = None
-        if tightest_pair is not None:
-            entry, win = tightest_pair
-            entry["pace"] = _pace(win.pct, win.resets_at, entry["kind"], now)
-            tightest = {"kind": entry["kind"], "pct_left": entry["pct_left"], "resets_at": entry["resets_at"]}
-
-        subscriptions.append({
-            "id": sub_id,
-            "provider": usage.tool,
-            "label": _sub_label(sub_id, usage),
-            "windows": windows_out,
-            "tightest": tightest,
-            "stale": _stale_text(usage),
-            "active_agents": 0,  # filled once agents are resolved
-        })
+        entry, soonest = _subscription_entry(usage, sub_id, label, trees, now, soonest)
+        if sub_id in by_id:
+            kept = _pick_reading(by_id[sub_id], entry)
+            subscriptions[subscriptions.index(by_id[sub_id])] = kept
+            by_id[sub_id] = kept
+            continue
+        by_id[sub_id] = entry
+        subscriptions.append(entry)
 
     agents_out = []
     for agent in agents:
-        sub_id = _agent_sub_id(agent, profiles)
+        sub_id = _agent_sub_id(agent, profiles, index)
         agents_out.append({
             "pid": agent.pid,
             "tool": agent.tool,
@@ -373,8 +390,10 @@ class HudDaemon:
             write_snapshot_atomic(self.cache_path, snapshot)
 
     def poll_usage_once(self) -> None:
-        usages, fetched_at = collect_usage()  # goes through usage.py's cache + 429 backoff
+        # One discovery, shared: reading the trees twice could hand build_snapshot
+        # a usage list and a profile list that disagree about what exists.
         profiles = claude_profiles()
+        usages, fetched_at = collect_usage(profiles)  # via usage.py's cache + 429 backoff
         value = _collect_value()
         with self._lock:
             self._usages, self._fetched_at = usages, fetched_at

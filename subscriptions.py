@@ -1,0 +1,279 @@
+"""Which Claude subscriptions this machine has, and what to call them.
+
+A Claude subscription is an *organization*, not a directory. Claude Code keeps
+one config tree per account you are signed into — the built-in `~/.claude` plus
+any sibling `~/.claude-<name>` made with CLAUDE_CONFIG_DIR — but the tree is
+just where the session state lives. What decides whose quota a session spends
+is the organization the tree is logged into, and one person can hold several
+(a personal Max org and a work Team org), or point two trees at the same one.
+
+So everything here keys on `organizationUuid`. Two trees on one org collapse
+into a single subscription that names both; two trees on different orgs stay
+apart even when they belong to the same human. `accountUuid` deliberately plays
+no part: it is the same person on both, so keying on it would fold two real
+subscriptions into one and halve the quota the HUD reports.
+
+The account metadata is a plain JSON file Claude Code maintains. For the default
+tree it lives at `~/.claude.json`; a tree opened with CLAUDE_CONFIG_DIR keeps its
+own copy inside the tree. Reading the wrong one is how the default account ended
+up unidentifiable.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# organizationType -> the word that names the plan on the card.
+_PLAN_WORDS = {
+    "claude_free": "Free",
+    "claude_pro": "Pro",
+    "claude_max": "Max",
+    "claude_team": "Team",
+    "claude_enterprise": "Enterprise",
+}
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+@dataclass(frozen=True)
+class ClaudeOrg:
+    """The organization a config tree is signed into: the subscription itself."""
+
+    uuid: str
+    name: str = ""
+    type: str = ""  # "claude_max", "claude_team", ...
+
+    @property
+    def plan(self) -> str:
+        """The plan word, e.g. "Max". Unknown types are title-cased rather than
+        dropped, so a new tier shows up as itself instead of disappearing."""
+        if self.type in _PLAN_WORDS:
+            return _PLAN_WORDS[self.type]
+        stripped = self.type.removeprefix("claude_").replace("_", " ").strip()
+        return stripped.title() if stripped else ""
+
+
+@dataclass
+class ClaudeProfile:
+    """One config tree, and the organization it is signed into (None when the
+    tree holds no readable account, e.g. signed out)."""
+
+    label: str  # short name, e.g. "max" or "team"
+    config_dir: Path  # the account's ~/.claude tree (default, or a CLAUDE_CONFIG_DIR)
+    default: bool = False  # the built-in ~/.claude, launched without CLAUDE_CONFIG_DIR
+    org: ClaudeOrg | None = None
+    # How this tree is worth naming on screen, resolved against the home it was
+    # discovered under rather than against the process's own, so a snapshot built
+    # for one home never prints paths from another.
+    display: str = ""
+
+    @property
+    def tree(self) -> str:
+        return self.display or str(self.config_dir)
+
+
+@dataclass
+class ClaudeSubscription:
+    """One subscription: an organization, plus every tree signed into it."""
+
+    id: str
+    label: str
+    profiles: list[ClaudeProfile] = field(default_factory=list)
+
+    @property
+    def trees(self) -> list[str]:
+        return [p.tree for p in self.profiles]
+
+
+def _display_path(path: Path, home: Path) -> str:
+    """`~/.claude-team` rather than the full home path, since the full path is
+    the user's name and adds nothing to a label."""
+    try:
+        return "~/" + str(path.relative_to(home))
+    except ValueError:
+        return str(path)
+
+
+def _account_metadata(config_dir: Path, default: bool, home: Path) -> dict:
+    """The `oauthAccount` block for a tree.
+
+    The default tree's metadata is at `~/.claude.json`, beside the tree rather
+    than inside it. Both locations are tried anyway, newest layout first, so a
+    Claude Code that moves the file does not silently make the account
+    unidentifiable — which is exactly the failure this module exists to fix.
+    """
+    candidates = [home / ".claude.json"] if default else []
+    candidates.append(config_dir / ".claude.json")
+    for path in candidates:
+        account = (_read_json(path) or {}).get("oauthAccount")
+        if isinstance(account, dict) and account.get("organizationUuid"):
+            return account
+    return {}
+
+
+def _org_for(config_dir: Path, default: bool, home: Path) -> ClaudeOrg | None:
+    account = _account_metadata(config_dir, default, home)
+    uuid = account.get("organizationUuid")
+    if not isinstance(uuid, str) or not uuid:
+        return None
+    return ClaudeOrg(
+        uuid=uuid,
+        name=str(account.get("organizationName") or ""),
+        type=str(account.get("organizationType") or ""),
+    )
+
+
+def _is_email(name: str) -> bool:
+    """A personal org is named after the account's own email address, which is
+    a stand-in for a name rather than one."""
+    return "@" in name
+
+
+def _profile_label(org: ClaudeOrg | None, config_dir: Path, default: bool) -> str:
+    """A short name for the tree. The plan names it when we know it, since that
+    is how a person thinks of a subscription ("my Team seat"); a tree with no
+    readable account falls back to its directory suffix, so an unnamed row still
+    says which tree it is."""
+    if org is not None:
+        if org.plan:
+            return org.plan.lower()
+        if org.name and not _is_email(org.name):
+            return org.name.split()[0].lower()
+    name = config_dir.name
+    if name.startswith(".claude-"):
+        return name[len(".claude-"):] or name
+    return "default" if default else name
+
+
+def claude_profiles(home: Path | None = None) -> list[ClaudeProfile]:
+    """Every Claude config tree on this machine, each with the organization it
+    is signed into. The built-in `~/.claude` comes first, then the sibling
+    `~/.claude-<name>` trees in name order."""
+    home = Path(home) if home else Path.home()
+    profiles: list[ClaudeProfile] = []
+    for config_dir, default in _config_dirs(home):
+        org = _org_for(config_dir, default, home)
+        profiles.append(
+            ClaudeProfile(
+                label=_profile_label(org, config_dir, default),
+                config_dir=config_dir,
+                default=default,
+                org=org,
+                display=_display_path(config_dir, home),
+            )
+        )
+    return profiles
+
+
+def _config_dirs(home: Path) -> list[tuple[Path, bool]]:
+    """(tree, is_default) for every config tree, default first. A machine with
+    no `~/.claude` at all still yields it, so callers always have something to
+    report against rather than an empty list."""
+    default = home / ".claude"
+    dirs: list[tuple[Path, bool]] = []
+    if default.is_dir():
+        dirs.append((default, True))
+    for d in sorted(home.glob(".claude-*")):
+        if d.is_dir():
+            dirs.append((d, False))
+    return dirs or [(default, True)]
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def _base_id(profile: ClaudeProfile) -> str:
+    """The readable half of a subscription id. Ids end up in the value block and
+    in `~/.config/agenthud/config.toml`, so they are named after the plan rather
+    than after a uuid nobody can type. The organization's own name is held back
+    as a tiebreaker: most people have one Team seat, and `claude-team` reads
+    better than `claude-carepilot` until a second one turns up."""
+    org = profile.org
+    if org is not None:
+        if org.plan:
+            return f"claude-{_slug(org.plan)}"
+        if org.name and not _is_email(org.name):
+            return f"claude-{_slug(org.name)}"
+        return "claude"
+    name = profile.config_dir.name
+    if name.startswith(".claude-"):
+        return f"claude-{_slug(name[len('.claude-'):])}"
+    return "claude-default" if profile.default else f"claude-{_slug(name)}"
+
+
+def _base_label(profile: ClaudeProfile) -> str:
+    org = profile.org
+    if org is not None and org.plan:
+        return f"Claude {org.plan}"
+    if org is not None and org.name and not _is_email(org.name):
+        return f"Claude {org.name}"
+    suffix = profile.label
+    return f"Claude {suffix.title()}" if suffix and suffix != "default" else "Claude"
+
+
+def claude_subscriptions(profiles: list[ClaudeProfile]) -> list[ClaudeSubscription]:
+    """Collapse config trees into subscriptions, one per organization.
+
+    Trees sharing an `organizationUuid` become a single entry naming both, since
+    they are one plan with one quota however many windows you sign into it from.
+    A tree with no readable organization cannot be shown to be the same
+    subscription as anything else, so it stays on its own row rather than being
+    merged on a guess.
+
+    Ids and labels are named after the organization; when two organizations
+    would land on the same name (two Team orgs, say) the organization name and
+    then a slice of its uuid are appended, so an id is always unique and the
+    common case still reads as `claude-team`.
+    """
+    groups: dict[str, list[ClaudeProfile]] = {}
+    for profile in profiles:
+        key = profile.org.uuid if profile.org else f"dir:{profile.config_dir}"
+        groups.setdefault(key, []).append(profile)
+
+    bases: dict[str, list[str]] = {}  # base id -> the group keys wanting it
+    for key, group in groups.items():
+        bases.setdefault(_base_id(group[0]), []).append(key)
+
+    subscriptions: list[ClaudeSubscription] = []
+    for key, group in groups.items():
+        head = group[0]
+        base, label = _base_id(head), _base_label(head)
+        if len(bases[base]) > 1:
+            base, label = _disambiguate(base, label, head)
+        subscriptions.append(ClaudeSubscription(id=base, label=label, profiles=group))
+    return subscriptions
+
+
+def _disambiguate(base: str, label: str, profile: ClaudeProfile) -> tuple[str, str]:
+    """Two organizations landing on one name. Prefer the organization's own name
+    to tell them apart, and fall back to a slice of its uuid, which is the only
+    thing guaranteed to differ."""
+    org = profile.org
+    if org is not None and org.name and not _is_email(org.name):
+        return f"{base}-{_slug(org.name)}", f"{label} ({org.name})"
+    if org is not None:
+        short = org.uuid[:8]
+        return f"{base}-{short}", f"{label} ({short})"
+    return f"{base}-{_slug(profile.config_dir.name)}", f"{label} ({profile.config_dir.name})"
+
+
+def subscription_index(profiles: list[ClaudeProfile]) -> dict[str, ClaudeSubscription]:
+    """config dir (as a string) -> the subscription that tree belongs to. This is
+    how a usage reading or a running agent is attributed: by the tree it came
+    from, never by a label that two accounts could share."""
+    index: dict[str, ClaudeSubscription] = {}
+    for sub in claude_subscriptions(profiles):
+        for profile in sub.profiles:
+            index[str(profile.config_dir)] = sub
+    return index

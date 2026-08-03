@@ -13,6 +13,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from helpers import write_claude_tree
+
 
 # ---------------------------------------------------------------- usage
 
@@ -83,25 +85,16 @@ def test_opencode_usage_spend(opencode_db: Path):
 # ---------------------------------------------------------------- dual claude plans
 
 
-def _make_claude_dir(home: Path, name: str, sub_type: str, org: str | None, token: str) -> Path:
-    d = home / name
-    d.mkdir(parents=True)
-    account = {"emailAddress": "joseph@carepilot.com"}
-    if org:
-        account.update({"organizationName": org, "organizationType": "claude_team"})
-    (d / ".claude.json").write_text(json.dumps({"oauthAccount": account}))
-    (d / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": token, "subscriptionType": sub_type}}))
-    return d
-
-
 def test_claude_profiles_discovers_extra_accounts(tmp_path: Path):
     from usage import claude_profiles
 
-    _make_claude_dir(tmp_path, ".claude", "claude_team", "CarePilot", "tok-team")
-    _make_claude_dir(tmp_path, ".claude-personal", "claude_max_20x", None, "tok-personal")
+    write_claude_tree(tmp_path, ".claude", org_uuid="org-team",
+                      org_name="CarePilot", org_type="claude_team", token="tok-team")
+    write_claude_tree(tmp_path, ".claude-personal", org_uuid="org-max",
+                      org_name="joseph@carepilot.com", org_type="claude_max", token="tok-personal")
 
     profiles = claude_profiles(home=tmp_path)
-    assert [p.label for p in profiles] == ["carepilot", "personal"]
+    assert [p.label for p in profiles] == ["team", "max"]
     assert profiles[0].default is True and profiles[1].default is False
     assert profiles[1].config_dir == tmp_path / ".claude-personal"
 
@@ -109,28 +102,42 @@ def test_claude_profiles_discovers_extra_accounts(tmp_path: Path):
 def test_profile_credentials_from_file(tmp_path: Path):
     from usage import ClaudeProfile, _profile_credentials
 
-    d = _make_claude_dir(tmp_path, ".claude-personal", "claude_max_20x", None, "tok-xyz")
-    creds = _profile_credentials(ClaudeProfile(label="personal", config_dir=d))
+    d = write_claude_tree(tmp_path, ".claude-personal", org_uuid="org-max",
+                          org_name="joseph@carepilot.com", org_type="claude_max",
+                          sub_type="claude_max_20x", token="tok-xyz")
+    creds = _profile_credentials(ClaudeProfile(label="max", config_dir=d))
     assert creds.token == "tok-xyz"
     assert creds.plan == "Max 20X"
     assert creds.file_path == d / ".credentials.json"  # write refreshes back here
 
 
-def test_fetch_claude_usages_labels_and_active(monkeypatch: pytest.MonkeyPatch):
+def test_fetch_claude_usages_stamp_the_tree_they_came_from(monkeypatch: pytest.MonkeyPatch):
+    """A reading has to say which config tree produced it, because that is the
+    only thing the caller can attribute it by. A label two accounts could share
+    is not."""
     import usage as usage_module
     from usage import ClaudeProfile, ToolUsage
 
     profiles = [
-        ClaudeProfile(label="carepilot", config_dir=Path("/x/.claude"), default=True),
-        ClaudeProfile(label="personal", config_dir=Path("/x/.claude-personal")),
+        ClaudeProfile(label="max", config_dir=Path("/x/.claude"), default=True),
+        ClaudeProfile(label="team", config_dir=Path("/x/.claude-team")),
     ]
-    monkeypatch.setattr(usage_module, "claude_profiles", lambda home=None: profiles)
     monkeypatch.setattr(usage_module, "fetch_claude_usage_for",
                         lambda p, force=False: ToolUsage(tool="claude", plan=p.label.title()))
 
-    usages = usage_module.fetch_claude_usages(active_label="personal")
-    assert [u.label for u in usages] == ["carepilot", "personal"]
-    assert [u.active for u in usages] == [False, True]  # personal is active
+    usages = usage_module.fetch_claude_usages(profiles)
+    assert [u.config_dir for u in usages] == ["/x/.claude", "/x/.claude-team"]
+
+
+def test_fetch_claude_usages_discovers_profiles_when_not_given_any(monkeypatch: pytest.MonkeyPatch):
+    import usage as usage_module
+    from usage import ClaudeProfile, ToolUsage
+
+    profiles = [ClaudeProfile(label="max", config_dir=Path("/x/.claude"), default=True)]
+    monkeypatch.setattr(usage_module, "claude_profiles", lambda home=None: profiles)
+    monkeypatch.setattr(usage_module, "fetch_claude_usage_for",
+                        lambda p, force=False: ToolUsage(tool="claude"))
+    assert [u.config_dir for u in usage_module.fetch_claude_usages()] == ["/x/.claude"]
 
 
 
@@ -219,16 +226,15 @@ def test_claude_usage_serves_cache_within_ttl(usage_probe):
 
 
 def test_claude_cache_hands_out_copies(usage_probe):
-    """fetch_claude_usages stamps .label/.active on what it gets back; if that
-    were the cached object those stamps would leak into later reads."""
+    """fetch_claude_usages stamps .config_dir on what it gets back; if that were
+    the cached object the stamp would leak into every later read."""
     import usage as usage_module
 
     profile, _ = usage_probe
     first = usage_module.fetch_claude_usage_for(profile)
-    first.label = "personal"
-    first.active = False
+    first.config_dir = "/x/.claude-somewhere-else"
     second = usage_module.fetch_claude_usage_for(profile)
-    assert second.label == "" and second.active is True
+    assert second.config_dir == ""
 
 
 def test_claude_429_keeps_last_bars_and_backs_off(usage_probe):

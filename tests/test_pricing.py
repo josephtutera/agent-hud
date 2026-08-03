@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from helpers import _write_jsonl
+from helpers import _write_jsonl, write_claude_tree
 
 
 # ---------------------------------------------------------------- value at API rates
@@ -81,6 +81,17 @@ def test_skipped_models_are_reported_not_priced_at_zero():
     assert "(unknown)" in resolver.skipped
 
 
+TEAM_ORG = "780d6270-5555-6666-7777-888888888888"
+
+
+def _signed_in_home(tmp_path: Path) -> Path:
+    """A machine with one Claude tree signed into a Team organization, so the
+    value report keys on `claude-team` the way the live one does."""
+    write_claude_tree(tmp_path, ".claude", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    return tmp_path
+
+
 def _write_claude_assistant(root: Path, project: str, name: str, ts: str, model: str, usage: dict, cost=None):
     line = {"type": "assistant", "timestamp": ts, "message": {"role": "assistant", "model": model, "usage": usage}}
     if cost is not None:
@@ -91,7 +102,7 @@ def _write_claude_assistant(root: Path, project: str, name: str, ts: str, model:
 def test_claude_scanner_prices_tokens_and_attributes_by_day(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(pricing, "load_price_table", lambda **kw: _TEST_TABLE)
     monkeypatch.setattr(pricing, "load_subscription_costs", lambda home=None: {})
-    home = tmp_path
+    home = _signed_in_home(tmp_path)
     projects = home / ".claude" / "projects"
     # two assistant turns on the same local day, plus one earlier this month
     _write_claude_assistant(
@@ -114,7 +125,7 @@ def test_claude_scanner_prices_tokens_and_attributes_by_day(monkeypatch: pytest.
 def test_costusd_passthrough_beats_token_math(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(pricing, "load_price_table", lambda **kw: _TEST_TABLE)
     monkeypatch.setattr(pricing, "load_subscription_costs", lambda home=None: {})
-    home = tmp_path
+    home = _signed_in_home(tmp_path)
     projects = home / ".claude" / "projects"
     # this line would price to $240 from tokens, but its explicit costUSD wins
     _write_claude_assistant(
@@ -130,7 +141,7 @@ def test_costusd_passthrough_beats_token_math(monkeypatch: pytest.MonkeyPatch, t
 def test_scanner_reports_skipped_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(pricing, "load_price_table", lambda **kw: _TEST_TABLE)
     monkeypatch.setattr(pricing, "load_subscription_costs", lambda home=None: {})
-    home = tmp_path
+    home = _signed_in_home(tmp_path)
     projects = home / ".claude" / "projects"
     _write_claude_assistant(
         projects, "-proj", "s1.jsonl", "2026-07-21T18:00:00+00:00", "no-such-model",
@@ -145,7 +156,7 @@ def test_scanner_reports_skipped_model(monkeypatch: pytest.MonkeyPatch, tmp_path
 def test_scan_cache_invalidates_on_mtime_change(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(pricing, "load_price_table", lambda **kw: _TEST_TABLE)
     monkeypatch.setattr(pricing, "load_subscription_costs", lambda home=None: {})
-    home = tmp_path
+    home = _signed_in_home(tmp_path)
     cache_dir = tmp_path / "cache"
     projects = home / ".claude" / "projects"
     f = projects / "-proj" / "s1.jsonl"
@@ -184,7 +195,7 @@ def _write_codex_rollout(root: Path, rel: str, sid: str, thread_source: str, mod
 def test_codex_scanner_prices_last_token_usage_and_skips_subagents(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(pricing, "load_price_table", lambda **kw: _TEST_TABLE)
     monkeypatch.setattr(pricing, "load_subscription_costs", lambda home=None: {})
-    home = tmp_path
+    home = _signed_in_home(tmp_path)
     codex = home / ".codex"
     # a user session: input_tokens includes the cached slice, so non-cached = 100-40 = 60
     _write_codex_rollout(
@@ -210,7 +221,7 @@ def test_today_and_month_boundary_attribution(monkeypatch: pytest.MonkeyPatch, t
     """A turn on the last day of the previous month is neither today nor this month."""
     monkeypatch.setattr(pricing, "load_price_table", lambda **kw: _TEST_TABLE)
     monkeypatch.setattr(pricing, "load_subscription_costs", lambda home=None: {})
-    home = tmp_path
+    home = _signed_in_home(tmp_path)
     projects = home / ".claude" / "projects"
     _write_claude_assistant(
         projects, "-proj", "june.jsonl", "2026-06-30T18:00:00+00:00", "claude-opus-4-8",
@@ -231,7 +242,7 @@ def test_config_parsing_and_multiple(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     if pricing.tomllib is None:
         pytest.skip("tomllib unavailable on this interpreter")
     monkeypatch.setattr(pricing, "load_price_table", lambda **kw: _TEST_TABLE)
-    home = tmp_path
+    home = _signed_in_home(tmp_path)
     projects = home / ".claude" / "projects"
     _write_claude_assistant(
         projects, "-proj", "s.jsonl", "2026-07-10T18:00:00+00:00", "claude-opus-4-8",
@@ -344,3 +355,28 @@ def test_hud_value_carries_none_cost_and_multiple_through():
     json.dumps(hud)  # None is JSON-safe
 
 
+
+
+def test_two_trees_on_one_org_are_summed_into_one_subscription(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """The value block keys on the organization exactly as the quota bars do, so
+    two config trees signed into one org report one figure covering both, not two
+    rows the card has no id for."""
+    monkeypatch.setattr(pricing, "load_price_table", lambda **kw: _TEST_TABLE)
+    monkeypatch.setattr(pricing, "load_subscription_costs", lambda home=None: {})
+    home = _signed_in_home(tmp_path)
+    write_claude_tree(tmp_path, ".claude-work", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    for tree, tokens in ((".claude", 100), (".claude-work", 30)):
+        _write_claude_assistant(
+            home / tree / "projects", "-proj", "s1.jsonl",
+            "2026-07-21T18:00:00+00:00", "claude-opus-4-8",
+            {"input_tokens": tokens, "output_tokens": 0,
+             "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+        )
+    now = datetime(2026, 7, 21, 15, 0, tzinfo=timezone.utc)
+    report = pricing.collect_value(now=now, home=home, cache_dir=tmp_path / "cache")
+
+    assert [s.id for s in report.subs] == ["claude-team", "codex"]
+    assert report.sub("claude-team").today_usd == 130.0  # both trees, one budget

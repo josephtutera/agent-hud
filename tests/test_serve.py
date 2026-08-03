@@ -18,13 +18,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import serve as serve_module
 from agents import RunningAgent
+from helpers import write_claude_tree
 from serve import (
     HudDaemon,
     build_snapshot,
     make_server,
     write_snapshot_atomic,
 )
-from usage import ClaudeProfile, ToolUsage, UsageWindow
+from subscriptions import claude_profiles
+from usage import ToolUsage, UsageWindow
+
+MAX_ORG = "3f3b964d-1111-2222-3333-444444444444"
+TEAM_ORG = "780d6270-5555-6666-7777-888888888888"
 
 
 # ---------------------------------------------------------------- fixtures
@@ -158,12 +163,15 @@ def test_agents_are_mapped_and_state_normalised():
 
 def test_active_agents_counted_per_subscription(tmp_path: Path):
     # a claude agent whose per-pid session file lives in the default config dir
+    write_claude_tree(tmp_path, ".claude", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
     default = tmp_path / ".claude"
     (default / "sessions").mkdir(parents=True)
     (default / "sessions" / "1.json").write_text("{}")
-    profiles = [ClaudeProfile(label="carepilot", config_dir=default, default=True)]
+    profiles = claude_profiles(home=tmp_path)
 
-    snap = build_snapshot([_claude_usage(), _codex_usage()], _now(), _fake_agents(), profiles=profiles)
+    usages = [_claude_usage(config_dir=str(default)), _codex_usage()]
+    snap = build_snapshot(usages, _now(), _fake_agents(), profiles=profiles)
     subs = {s["id"]: s for s in snap["subscriptions"]}
     assert subs["claude-team"]["active_agents"] == 1
     assert subs["codex"]["active_agents"] == 1
@@ -171,16 +179,62 @@ def test_active_agents_counted_per_subscription(tmp_path: Path):
     assert claude_agent["subscription_id"] == "claude-team"
 
 
-def test_multi_account_claude_ids_and_labels():
-    default = ClaudeProfile(label="carepilot", config_dir=Path("/x/.claude"), default=True)
-    personal = ClaudeProfile(label="personal", config_dir=Path("/x/.claude-personal"))
-    usages = [
-        _claude_usage(label="carepilot"),  # the default account carries an org label
-        _claude_usage(label="personal"),
-    ]
-    snap = build_snapshot(usages, _now(), [], profiles=[default, personal])
+def test_subscriptions_are_named_by_organization_not_directory(tmp_path: Path):
+    """The default tree is whatever account it holds — here a personal Max, not
+    a team seat, which the old directory-derived id asserted it was."""
+    write_claude_tree(tmp_path, ".claude", org_uuid=MAX_ORG,
+                      org_name="joseph@carepilot.com", org_type="claude_max")
+    write_claude_tree(tmp_path, ".claude-team", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    profiles = claude_profiles(home=tmp_path)
+
+    usages = [_claude_usage(config_dir=str(p.config_dir)) for p in profiles]
+    snap = build_snapshot(usages, _now(), [], profiles=profiles)
     subs = {s["id"]: s["label"] for s in snap["subscriptions"]}
-    assert subs == {"claude-team": "Claude Team", "claude-personal": "Claude Personal"}
+    assert subs == {"claude-max": "Claude Max", "claude-team": "Claude Team"}
+
+
+def test_two_trees_on_one_org_are_one_subscription(tmp_path: Path):
+    """Two config trees signed into one organization spend one quota. Reporting
+    both would show the headroom twice."""
+    write_claude_tree(tmp_path, ".claude", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    write_claude_tree(tmp_path, ".claude-work", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    profiles = claude_profiles(home=tmp_path)
+
+    usages = [_claude_usage(config_dir=str(p.config_dir)) for p in profiles]
+    snap = build_snapshot(usages, _now(), [], profiles=profiles)
+    assert [s["id"] for s in snap["subscriptions"]] == ["claude-team"]
+    assert snap["subscriptions"][0]["trees"] == ["~/.claude", "~/.claude-work"]
+
+
+def test_a_fresh_tree_beats_a_stale_one_for_the_same_subscription(tmp_path: Path):
+    """One tree sitting in a rate-limit cooldown must not make the subscription
+    look old when the other tree read it cleanly a second ago."""
+    write_claude_tree(tmp_path, ".claude", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    write_claude_tree(tmp_path, ".claude-work", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    profiles = claude_profiles(home=tmp_path)
+
+    usages = [
+        _claude_usage(config_dir=str(profiles[0].config_dir), stale="rate limited · retry 4m"),
+        _claude_usage(config_dir=str(profiles[1].config_dir)),
+    ]
+    snap = build_snapshot(usages, _now(), [], profiles=profiles)
+    assert len(snap["subscriptions"]) == 1
+    assert snap["subscriptions"][0]["stale"] is None
+
+
+def test_an_unattributable_reading_is_still_reported():
+    """No profiles to match against (a machine we could not read, or a tree that
+    vanished mid-poll). The reading is shown unattributed rather than dropped or
+    guessed onto somebody else's subscription."""
+    snap = build_snapshot([_claude_usage()], _now(), [], profiles=[])
+    sub = snap["subscriptions"][0]
+    assert sub["id"] == "claude" and sub["label"] == "Claude Team"  # plan from the reading
+    assert sub["trees"] == []
 
 
 # ---------------------------------------------------------------- stale
@@ -313,7 +367,7 @@ def test_daemon_writes_file_only_on_content_change(tmp_path: Path, monkeypatch: 
     # stable reading: same objects and same fetched_at each poll, so only
     # generated_at would differ between rebuilds
     usages, fetched_at, agents = _fake_usages(), _now(), _fake_agents()
-    monkeypatch.setattr(serve_module, "collect_usage", lambda: (usages, fetched_at))
+    monkeypatch.setattr(serve_module, "collect_usage", lambda profiles=None: (usages, fetched_at))
     monkeypatch.setattr(serve_module, "claude_profiles", lambda: [])
     monkeypatch.setattr(serve_module, "running_agents", lambda: agents)
     monkeypatch.setattr(serve_module, "enrich", lambda a, **kw: a)
@@ -337,7 +391,7 @@ def test_daemon_writes_file_only_on_content_change(tmp_path: Path, monkeypatch: 
 
 @pytest.fixture
 def running_server(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.setattr(serve_module, "collect_usage", lambda: (_fake_usages(), _now()))
+    monkeypatch.setattr(serve_module, "collect_usage", lambda profiles=None: (_fake_usages(), _now()))
     monkeypatch.setattr(serve_module, "claude_profiles", lambda: [])
     monkeypatch.setattr(serve_module, "running_agents", lambda: _fake_agents())
     monkeypatch.setattr(serve_module, "enrich", lambda agents, **kw: agents)

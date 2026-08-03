@@ -40,16 +40,21 @@ public struct HUDSnapshot: Codable, Equatable {
 }
 
 public struct Subscription: Codable, Equatable, Identifiable {
-    public let id: String            // "claude-team" | "claude-personal" | "codex"
+    public let id: String            // "claude-max" | "claude-team" | "codex"
     public let provider: String      // "claude" | "codex"
     public let label: String
+    /// The Claude config trees signed into this subscription, e.g.
+    /// `["~/.claude", "~/.claude-team"]`. More than one means two trees share an
+    /// organization and were collapsed into this entry. Empty for Codex, and for
+    /// a reading the daemon could not attribute.
+    public let trees: [String]
     public let windows: [Window]
     public let tightest: Window?
     public let stale: String?        // null, or a reason string
     public let activeAgents: Int
 
     enum CodingKeys: String, CodingKey {
-        case id, provider, label, windows, tightest, stale
+        case id, provider, label, trees, windows, tightest, stale
         case activeAgents = "active_agents"
     }
 
@@ -57,6 +62,7 @@ public struct Subscription: Codable, Equatable, Identifiable {
         id: String,
         provider: String,
         label: String,
+        trees: [String] = [],
         windows: [Window],
         tightest: Window?,
         stale: String?,
@@ -65,10 +71,25 @@ public struct Subscription: Codable, Equatable, Identifiable {
         self.id = id
         self.provider = provider
         self.label = label
+        self.trees = trees
         self.windows = windows
         self.tightest = tightest
         self.stale = stale
         self.activeAgents = activeAgents
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        provider = try c.decode(String.self, forKey: .provider)
+        label = try c.decode(String.self, forKey: .label)
+        // Absent on a snapshot written before subscriptions were keyed on the
+        // organization, so decode it leniently rather than failing the whole read.
+        trees = try c.decodeIfPresent([String].self, forKey: .trees) ?? []
+        windows = try c.decode([Window].self, forKey: .windows)
+        tightest = try c.decodeIfPresent(Window.self, forKey: .tightest)
+        stale = try c.decodeIfPresent(String.self, forKey: .stale)
+        activeAgents = try c.decode(Int.self, forKey: .activeAgents)
     }
 }
 

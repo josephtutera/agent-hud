@@ -28,6 +28,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from collectors import _parse_ts
+from subscriptions import ClaudeProfile, claude_profiles
+
+# Re-exported: which accounts exist is subscriptions.py's job, but usage.py is
+# where the rest of the daemon reaches for them.
+__all__ = [
+    "ClaudeCredentials",
+    "ClaudeProfile",
+    "ToolUsage",
+    "UsageWindow",
+    "claude_profiles",
+    "collect_usage",
+    "fetch_claude_usage_for",
+    "fetch_claude_usages",
+    "fetch_codex_usage",
+    "fetch_opencode_usage",
+]
 
 # The usage endpoint rate-limits per account, and every Claude Code session
 # polls it too, so the dashboard has to be a light touch: reuse a recent
@@ -66,8 +82,10 @@ class ToolUsage:
     windows: list[UsageWindow] = field(default_factory=list)
     note: str = ""
     error: str | None = None
-    label: str = ""  # claude profile label (e.g. "personal"); "" when single-account
-    active: bool = True  # for multi-profile claude: is this the plan new sessions use?
+    # The Claude config tree this reading came from, as a string. It is how a
+    # reading is attributed to a subscription: a label could be shared by two
+    # accounts, a tree cannot. Empty for codex and opencode.
+    config_dir: str = ""
     # BYOK tools (opencode) have no quota %, so they report dollar spend instead;
     # the renderer drops this into the 7d column in place of a utilization bar.
     spend: float | None = None
@@ -91,41 +109,6 @@ def _read_json(path: Path) -> dict | None:
             return json.load(fh)
     except (OSError, ValueError):
         return None
-
-
-@dataclass
-class ClaudeProfile:
-    label: str  # short name shown in the plan toggle, e.g. "personal"
-    config_dir: Path  # the account's ~/.claude tree (default or a CLAUDE_CONFIG_DIR)
-    default: bool = False  # the built-in ~/.claude, launched without CLAUDE_CONFIG_DIR
-
-
-def claude_profiles(home: Path | None = None) -> list[ClaudeProfile]:
-    """Discover Claude accounts: the default ~/.claude plus any sibling
-    ~/.claude-<name> trees created with CLAUDE_CONFIG_DIR for extra accounts."""
-    home = Path(home) if home else Path.home()
-    profiles: list[ClaudeProfile] = []
-    default = home / ".claude"
-    if default.is_dir():
-        profiles.append(ClaudeProfile(label=_profile_label(default, "default"), config_dir=default, default=True))
-    for d in sorted(home.glob(".claude-*")):
-        if d.is_dir():
-            # the dir suffix is the user's own name for the account (~/.claude-personal)
-            suffix = d.name[len(".claude-"):] or d.name
-            profiles.append(ClaudeProfile(label=suffix, config_dir=d))
-    return profiles or [ClaudeProfile(label="default", config_dir=default, default=True)]
-
-
-def _profile_label(config_dir: Path, fallback: str) -> str:
-    """A short label from the account's own metadata, else the dir suffix."""
-    account = (_read_json(config_dir / ".claude.json") or {}).get("oauthAccount") or {}
-    org = account.get("organizationName")
-    if org and account.get("organizationType") == "claude_team":
-        return org.split()[0].lower()
-    email = account.get("emailAddress")
-    if email and "@" in email:
-        return email.split("@")[0]
-    return fallback
 
 
 def _keychain_service(profile: ClaudeProfile) -> str:
@@ -390,7 +373,8 @@ def _short_delay(seconds: float) -> str:
 
 
 def _copy(usage: ToolUsage) -> ToolUsage:
-    """Hand out a copy: callers mutate .label/.active, and the cache shouldn't see it."""
+    """Hand out a copy: callers stamp .config_dir on what they get back, and the
+    cache must not see it."""
     return replace(usage, windows=list(usage.windows))
 
 
@@ -504,27 +488,18 @@ def fetch_claude_usage_for(profile: ClaudeProfile, force: bool = False) -> ToolU
     return _copy(usage)
 
 
-def fetch_claude_usages(active_label: str | None = None, force: bool = False) -> list[ToolUsage]:
-    """One ToolUsage per Claude account. `label` is set (and the active plan
-    flagged) only when more than one account exists, so single-account setups
-    render exactly as before."""
-    profiles = claude_profiles()
+def fetch_claude_usages(profiles: list[ClaudeProfile] | None = None, force: bool = False) -> list[ToolUsage]:
+    """One ToolUsage per Claude config tree, each stamped with the tree it came
+    from so the caller can attribute it to a subscription. Pass `profiles` to
+    reuse a discovery the caller has already done, so the reading and the
+    identity can never come from two different scans of the machine."""
+    profiles = claude_profiles() if profiles is None else profiles
     usages = []
     for profile in profiles:
         usage = fetch_claude_usage_for(profile, force=force)
-        if len(profiles) > 1:
-            usage.label = profile.label
+        usage.config_dir = str(profile.config_dir)
         usages.append(usage)
-    if len(profiles) > 1:
-        active = active_label if active_label in {p.label for p in profiles} else profiles[0].label
-        for usage, profile in zip(usages, profiles):
-            usage.active = profile.label == active
     return usages
-
-
-def fetch_claude_usage() -> ToolUsage:
-    """Back-compat single-account fetch (first profile)."""
-    return fetch_claude_usages()[0]
 
 
 # ---------------------------------------------------------------- codex
@@ -625,6 +600,8 @@ def fetch_opencode_usage(db_path: Path | None = None) -> ToolUsage:
 # ---------------------------------------------------------------- combined
 
 
-def collect_usage(active_claude: str | None = None, force: bool = False) -> tuple[list[ToolUsage], datetime]:
-    usages = [*fetch_claude_usages(active_claude, force=force), fetch_codex_usage(), fetch_opencode_usage()]
+def collect_usage(
+    profiles: list[ClaudeProfile] | None = None, force: bool = False
+) -> tuple[list[ToolUsage], datetime]:
+    usages = [*fetch_claude_usages(profiles, force=force), fetch_codex_usage(), fetch_opencode_usage()]
     return usages, datetime.now(timezone.utc)

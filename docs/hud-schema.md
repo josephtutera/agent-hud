@@ -60,6 +60,7 @@ Run it with `agenthud serve` (or `agenthud --serve`), optionally with `--host` a
   "id": "claude-team",
   "provider": "claude",
   "label": "Claude Team",
+  "trees": ["~/.claude-team"],
   "windows": [ ... ],
   "tightest": { "kind": "session_5h", "pct_left": 62, "resets_at": "..." } | null,
   "stale": null,
@@ -67,11 +68,21 @@ Run it with `agenthud serve` (or `agenthud --serve`), optionally with `--host` a
 }
 ```
 
+A Claude subscription is an **organization**, not a config directory. Claude Code
+keeps one tree per account you are signed into — the built-in `~/.claude` plus any
+`~/.claude-<name>` made with `CLAUDE_CONFIG_DIR` — but the tree is only where the
+session state lives; the organization is what holds the quota. So two trees signed
+into one organization are reported as **one** subscription naming both, and two
+trees on different organizations stay apart even when the same person owns both.
+`accountUuid` is deliberately not used: it is the same person on both, so keying
+on it would fold two real subscriptions into one and halve the quota reported.
+
 | field | type | meaning |
 |---|---|---|
-| `id` | string | Stable id. `claude-team` is the built-in `~/.claude`; `claude-personal` is `~/.claude-personal`; any other `~/.claude-<name>` becomes `claude-<name>`; Codex is `codex`. |
+| `id` | string | Stable id, derived from the organization: `claude-<plan>` (`claude-max`, `claude-team`, `claude-pro`, …). Two organizations on one plan are told apart by name (`claude-team-carepilot`) and, failing that, by a slice of the organization uuid. A tree with no readable account keeps a directory-derived id (`claude-default`, `claude-<suffix>`) so it is still reported rather than dropped. Codex is always `codex`. |
 | `provider` | `"claude"` \| `"codex"` | Which vendor this subscription is. |
-| `label` | string | Display name, e.g. `Claude Team`, `Claude Personal`, `Codex Max`. |
+| `label` | string | Display name, e.g. `Claude Max`, `Claude Team`, `Claude Team (CarePilot)`, `Codex Pro`. |
+| `trees` | array of strings | The config trees signed into this subscription, e.g. `["~/.claude", "~/.claude-work"]`. More than one means they were collapsed into this entry. Empty for Codex, and for a reading the daemon could not attribute to a tree. |
 | `windows` | array | The usage windows this subscription reports (see below). |
 | `tightest` | object or null | The window with the least headroom (lowest `pct_left`), copied out for quick access. `null` when no window has a percentage. Carries `kind`, `pct_left`, `resets_at`. |
 | `stale` | string or null | `null` when the reading is fresh. A human reason like `"rate limited, retry 4m"` when the values are last-good rather than current (rate limit cooldown or a fetch failure). Stale data is never presented as fresh: the windows keep their last-good numbers and this field says why. |
@@ -124,7 +135,7 @@ dry (safe), negative means you would run out first at the current pace.
 | `state` | `"working"` \| `"waiting"` \| `"idle"` | Live status. `waiting` means it is blocked on the user (e.g. a permission prompt). An unknown status is reported as `idle`. |
 | `action` | string or null | The current action text (e.g. `editing auth.py`) when known, else `null`. |
 | `since_seconds` | int or null | Approximate session uptime in seconds, or `null` when not derivable. |
-| `subscription_id` | string or null | The subscription this agent spends against, when determinable. Codex agents are always `codex`; a Claude agent is matched to the account whose config dir holds its per-pid session file; opencode and unresolved agents are `null`. |
+| `subscription_id` | string or null | The subscription this agent spends against, when determinable. Codex agents are always `codex`; a Claude agent is matched to the config tree holding its per-pid session file, and from there to that tree's subscription; opencode and unresolved agents are `null`. |
 
 ## `value`
 
