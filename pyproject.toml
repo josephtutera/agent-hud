@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-hud"
+version = "0.1.0"
+description = "The snapshot daemon behind the Agent HUD menu-bar readout"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Joseph Tutera" }]
+# 3.11 for tomllib, which pricing.py reads the subscription costs with.
+requires-python = ">=3.11"
+# Deliberately empty: the daemon is standard library only, so the menu-bar app
+# can start it with a bare python3 and no virtualenv.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+agenthud = "main:main"
+
+[project.urls]
+Homepage = "https://github.com/josephtutera/agent-hud"
+Issues = "https://github.com/josephtutera/agent-hud/issues"
+
+[tool.setuptools]
+py-modules = ["main", "activity", "agents", "collectors", "models", "pricing", "serve", "usage"]
+
+[tool.setuptools.package-data]
+"*" = ["data/model_prices_snapshot.json"]
