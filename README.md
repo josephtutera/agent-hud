@@ -55,11 +55,17 @@ The card renders headlessly to a PNG from a committed fixture snapshot, so a
 reviewer can see the UI without running the menu bar:
 
 ```sh
-swift run agenthud-hud --render-preview preview.png            # a day with problems
-swift run agenthud-hud --render-preview-clear preview-all-clear.png
-swift run agenthud-hud --render-preview-light preview-light.png
+swift run agenthud-hud --render-preview preview.png                        # problems, dark
+swift run agenthud-hud --render-preview-light preview-light.png            # problems, light
+swift run agenthud-hud --render-preview-clear preview-all-clear.png        # all clear, dark
+swift run agenthud-hud --render-preview-clear-light preview-all-clear-light.png
 swift run agenthud-hud --render-preview-menubar preview-menubar.png
 ```
+
+The card follows the system appearance: every semantic colour is a
+`Theme.dynamic(light:dark:)` pair, and a test resolves each one against both
+appearances and fails if the two match, so a token added as a plain hex cannot
+ship looking right on only one card.
 
 ## Tests
 

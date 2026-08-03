@@ -21,7 +21,10 @@ public enum Theme {
     public static let hairline = dynamic(light: 0xE4E6EB, dark: 0x2A2C33)
     public static let text     = dynamic(light: 0x17181C, dark: 0xF2F3F5)
     public static let muted    = dynamic(light: 0x6A6F78, dark: 0x8A8F98)
-    public static let faint    = dynamic(light: 0xA2A7AF, dark: 0x5A5F68)
+    // `faint` is the recessive tier — captions, the meter rows a pod is not
+    // headlining — but it still carries readings, so it is held at 3:1 against
+    // the card it sits on rather than allowed to fade to decoration.
+    public static let faint    = dynamic(light: 0x8C9299, dark: 0x61666F)
     public static let amber    = dynamic(light: 0xB26B00, dark: 0xFFB340)
     public static let green    = dynamic(light: 0x1E9E4A, dark: 0x34C759)
     public static let red      = dynamic(light: 0xDA3A3F, dark: 0xFF5F57)
@@ -35,10 +38,10 @@ public enum Theme {
     public static let chip        = dynamic(light: 0xFFFFFF, dark: 0x0B0C0E)
     public static let chipBorder  = dynamic(light: 0xE4E6EB, dark: 0x0B0C0E)
 
-    // Brand marks. Coral deepens slightly on white so the Claude mark holds
-    // contrast; the Codex mark draws in `text` on the card (see providerColor).
+    // Brand marks. Both deepen on white so they hold contrast against the light
+    // card; the Codex mark draws in `text` on the card (see providerColor).
     public static let claudeCoral = dynamic(light: 0xC15F3C, dark: 0xD97757)
-    public static let codexGreen  = Color(hex: 0x19C37D)
+    public static let codexGreen  = dynamic(light: 0x109965, dark: 0x19C37D)
 
     /// A color that resolves per system appearance: `light` in Aqua, `dark` in
     /// Dark Aqua. On platforms without AppKit it collapses to the dark value.
@@ -64,16 +67,6 @@ public enum Theme {
         return green
     }
 
-    /// The tool dot color used in the agents section.
-    public static func toolColor(_ tool: String) -> Color {
-        switch tool {
-        case "claude":   return claudeCoral
-        case "codex":    return codexGreen
-        case "opencode": return Color(hex: 0xA78BFA)
-        default:         return muted
-        }
-    }
-
     /// The brand mark tint for a subscription provider on the card. Claude is
     /// coral; Codex draws in `text` (ink on the light card, near-white on the
     /// dark one) since a fixed white mark would vanish on a white surface.
@@ -81,29 +74,11 @@ public enum Theme {
         provider == "codex" ? text : claudeCoral
     }
 
-    // MARK: Agent identity
-    /// Distinct hues, one per running agent, so two sessions on the same tool
-    /// are still tellable apart at a glance in the notch. Tool is no longer the
-    /// color axis (most sessions are Claude); it moves to the dropdown label.
-    /// Kept clear of the severity green/amber/red the quota rings own.
-    public static let agentPalette: [Color] = [
-        claudeCoral,           // coral
-        Color(hex: 0x4EC9E0),  // cyan
-        Color(hex: 0xB58BFF),  // violet
-        Color(hex: 0xFF7EB6),  // pink
-        Color(hex: 0x5B9BFF),  // blue
-        Color(hex: 0x5AD1B0),  // teal
-        Color(hex: 0xE0B84E),  // gold
-        Color(hex: 0xC98BFF),  // orchid
-    ]
-
-    /// The agent color at a palette slot, wrapping if there are more agents
-    /// than hues (rare — you seldom run eight at once).
-    public static func agentColor(_ index: Int) -> Color {
-        guard !agentPalette.isEmpty else { return muted }
-        let n = agentPalette.count
-        return agentPalette[((index % n) + n) % n]
-    }
+    /// The dot beside a pod's "2 agents" line. One colour, not a palette: the
+    /// card counts agents per subscription rather than listing them, so there is
+    /// nothing left to tell apart by hue. Deliberately clear of the severity
+    /// green/amber/red the quota meters own, so it never reads as a warning.
+    public static let agentDot = dynamic(light: 0x1F87A8, dark: 0x4EC9E0)
 
     // MARK: Type
     public static func mono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
