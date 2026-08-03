@@ -86,6 +86,11 @@ class ToolUsage:
     # reading is attributed to a subscription: a label could be shared by two
     # accounts, a tree cannot. Empty for codex and opencode.
     config_dir: str = ""
+    # When these numbers were actually true. Not when the snapshot was built:
+    # Claude is polled every few minutes, but Codex is only as fresh as your last
+    # Codex turn, which can be days ago, and a stale percentage presented as a
+    # current one is the failure this whole readout exists to avoid.
+    read_at: datetime | None = None
     # BYOK tools (opencode) have no quota %, so they report dollar spend instead;
     # the renderer drops this into the 7d column in place of a utilization bar.
     spend: float | None = None
@@ -416,7 +421,12 @@ def _claude_usage_from_token(token: str, plan: str) -> ToolUsage:
         return ToolUsage(tool="claude", plan=plan, error=str(exc)[:60])
     except Exception as exc:  # network down, DNS, timeout
         return ToolUsage(tool="claude", plan=plan, error=str(exc)[:60])
-    return ToolUsage(tool="claude", plan=plan, windows=_parse_claude_usage(payload))
+    return ToolUsage(
+        tool="claude",
+        plan=plan,
+        windows=_parse_claude_usage(payload),
+        read_at=datetime.now(timezone.utc),
+    )
 
 
 SIGNED_OUT = "signed out · run claude auth login"
@@ -556,11 +566,15 @@ def fetch_codex_usage(root: Path | None = None, scan: int = 40) -> ToolUsage:
                     resets_at=datetime.fromtimestamp(resets, tz=timezone.utc) if resets else None,
                 )
             )
+        # Codex writes these numbers into a rollout file as a side effect of a
+        # turn, so the file's mtime is when they were last true. There is no API
+        # to ask, which is exactly why the age has to travel with the reading.
         age = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
         return ToolUsage(
             tool="codex",
             plan=(latest.get("plan_type") or "").title(),
             windows=windows,
+            read_at=age,
             note=f"as of {age.astimezone().strftime('%b %d %-I:%M %p')}",
         )
     return ToolUsage(tool="codex", error="no rate-limit data yet")

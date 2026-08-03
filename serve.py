@@ -246,6 +246,10 @@ def _subscription_entry(usage, sub_id, label, trees, now, soonest) -> tuple[dict
         "provider": usage.tool,
         "label": label,
         "trees": trees,
+        # When these numbers were last true, which is not when the snapshot was
+        # built. Claude is re-read every few minutes; Codex is only as fresh as
+        # the last Codex turn, and that can be days.
+        "read_at": _iso(usage.read_at),
         "windows": windows_out,
         "tightest": tightest,
         "stale": _stale_text(usage),
@@ -261,6 +265,10 @@ def _pick_reading(existing, candidate):
     a subscription look old when the other tree just read it cleanly."""
     if existing["stale"] and not candidate["stale"]:
         return candidate
+    if existing["stale"] == candidate["stale"]:
+        # Both equally trustworthy, so prefer whichever was read more recently.
+        if (candidate["read_at"] or "") > (existing["read_at"] or ""):
+            return candidate
     return existing
 
 

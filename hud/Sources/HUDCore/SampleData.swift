@@ -23,6 +23,7 @@ extension HUDSnapshot {
             provider: "claude",
             label: "Claude Team",
             trees: ["~/.claude-team"],
+            readAt: at(-2),
             windows: [
                 Window(kind: "session_5h", pctLeft: 18, resetsAt: at(126),
                        pace: Pace(projectedDryAt: at(41), marginSeconds: 85 * 60)),
@@ -37,6 +38,7 @@ extension HUDSnapshot {
             provider: "claude",
             label: "Claude Max",
             trees: ["~/.claude"],
+            readAt: at(-2),
             windows: [
                 Window(kind: "session_5h", pctLeft: 74, resetsAt: at(72), pace: nil),
                 Window(kind: "weekly_7d", pctLeft: 88, resetsAt: at(5 * 24 * 60), pace: nil),
@@ -50,6 +52,9 @@ extension HUDSnapshot {
             id: "codex",
             provider: "codex",
             label: "Codex Pro",
+            // Deliberately old: Codex only updates when you use Codex, so this
+            // is its normal state after a quiet day and the pod must say so.
+            readAt: at(-3 * 24 * 60),
             windows: [
                 Window(kind: "session_5h", pctLeft: 52, resetsAt: at(38), pace: nil),
                 Window(kind: "weekly", pctLeft: 43, resetsAt: at(3 * 24 * 60 + 8 * 60), pace: nil),

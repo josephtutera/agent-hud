@@ -223,6 +223,15 @@ struct PodView: View {
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 3)
+                } else if let readAt = sub.agedReading(now: now) {
+                    // No failure to report, the numbers are just old. Codex only
+                    // updates when you use Codex, so this is its normal state
+                    // after a quiet day and must not read as an alarm.
+                    Text("as of \(Fmt.ago(readAt, now: now))")
+                        .font(Theme.label(9))
+                        .foregroundStyle(Theme.faint)
+                        .lineLimit(1)
+                        .padding(.top, 3)
                 }
             }
             .padding(.top, 3)

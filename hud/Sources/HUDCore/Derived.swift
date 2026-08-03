@@ -72,6 +72,23 @@ extension Subscription {
         return session
     }
 
+    /// How old a reading is allowed to be before the pod says so. Claude is
+    /// re-read every three minutes, so anything past this means something is
+    /// wrong — a cooldown, a dead daemon, a machine just back from sleep — or,
+    /// for Codex, simply that you have not run it lately.
+    public static let freshnessLimit: TimeInterval = 10 * 60
+
+    /// The reading's age when it is old enough to be worth saying, else nil.
+    ///
+    /// Codex has no API to ask: its numbers come out of a rollout file written as
+    /// a side effect of a turn, so they are exactly as old as your last Codex
+    /// turn. A weekly window that has since reset makes an old percentage wrong,
+    /// not merely late, which is why this is surfaced rather than smoothed over.
+    public func agedReading(now: Date) -> Date? {
+        guard let readAt, now.timeIntervalSince(readAt) > Self.freshnessLimit else { return nil }
+        return readAt
+    }
+
     public var isIdle: Bool { activeAgents <= 0 }
 
     public var hasLimitReached: Bool {

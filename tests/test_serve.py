@@ -501,3 +501,39 @@ def test_a_failed_setup_poll_clears_the_block_rather_than_keeping_the_last_good_
     assert daemon.snapshot()["setup"] == good
     daemon.poll_setup_once()
     assert daemon.snapshot()["setup"] is None
+
+
+# ---------------------------------------------------------------- freshness
+
+
+def test_a_reading_carries_when_it_was_true():
+    """Not when the snapshot was built. Claude is re-read every few minutes, but
+    Codex is only as fresh as your last Codex turn."""
+    read_at = _now() - timedelta(days=3)
+    usage = _codex_usage(read_at=read_at)
+    sub = build_snapshot([usage], _now(), [])["subscriptions"][0]
+    assert sub["read_at"] == read_at.isoformat()
+
+
+def test_a_reading_with_no_timestamp_says_so_rather_than_guessing():
+    sub = build_snapshot([_claude_usage()], _now(), [])["subscriptions"][0]
+    assert sub["read_at"] is None
+
+
+def test_the_fresher_of_two_trees_on_one_org_wins(tmp_path: Path):
+    """Both readings are equally trustworthy, so the tiebreak is recency: the
+    other tree may have been polled minutes ago."""
+    write_claude_tree(tmp_path, ".claude", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    write_claude_tree(tmp_path, ".claude-work", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    profiles = claude_profiles(home=tmp_path)
+    older, newer = _now() - timedelta(minutes=30), _now()
+
+    usages = [
+        _claude_usage(config_dir=str(profiles[0].config_dir), read_at=older),
+        _claude_usage(config_dir=str(profiles[1].config_dir), read_at=newer),
+    ]
+    snap = build_snapshot(usages, _now(), [], profiles=profiles)
+    assert len(snap["subscriptions"]) == 1
+    assert snap["subscriptions"][0]["read_at"] == newer.isoformat()

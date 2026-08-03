@@ -130,6 +130,24 @@ panel nobody established. The daemon clears the block on a failed poll rather
 than holding the last good answer, so the card can never show yesterday's
 all-clear.
 
+## Staying current
+
+| what can go stale | what happens |
+|---|---|
+| the Claude OAuth token (they last ~8h) | refreshed from the stored refresh token before it expires, and once more on a 401; the new token is written back so Claude Code and the HUD keep sharing one credential |
+| the refresh token itself, or a signed-out account | the reading keeps its last-good numbers and the pod says `signed out · run claude auth login`, then sits out 15 minutes rather than hammering a dead credential |
+| a locked Keychain | same, with `unlock Keychain or sign in to Claude Code` |
+| the usage endpoint rate-limiting us | exponential backoff from 2 to 15 minutes, and the pod says `rate limited · retry 4m` |
+| the network | the reading is not cached, so the next poll retries; the pod shows the last-good numbers with the reason |
+| Codex figures going old | Codex has no API — its numbers come out of a rollout file written by a turn — so the reading carries `read_at`, and a pod older than 10 minutes says `as of 3d ago` |
+| the daemon dying | the app notices it has no snapshot and restarts it, backing off from 15 seconds to 5 minutes so a port held by something else cannot cause a spawn loop |
+| `check-setup.sh` being absent, old, slow or broken | the setup block is omitted and the card says **setup unknown**, never a false all-clear |
+
+Poll intervals: live agent activity every 2s, setup health every 60s, subscription
+usage every 180s. Usage is deliberately slow and always goes through `usage.py`'s
+own cache and backoff, because the endpoint is rate-limited per account and every
+running Claude Code session polls it too.
+
 ## Safety
 
 The HTTP API has no authentication and permissive CORS, so it refuses to bind

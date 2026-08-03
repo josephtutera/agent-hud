@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from helpers import write_claude_tree
+from helpers import _write_jsonl, write_claude_tree
 
 
 # ---------------------------------------------------------------- usage
@@ -572,3 +572,27 @@ def test_keychain_write_round_trips_a_quoted_payload(monkeypatch: pytest.MonkeyP
     assert '\\"' in line and "\\\\" in line  # quotes and backslashes escaped for the tool
 
 
+
+
+def test_a_codex_reading_is_stamped_with_the_rollout_mtime(tmp_path: Path):
+    """Codex has no API to ask, so its numbers are exactly as old as the file a
+    turn last wrote. That age has to travel with the reading, or a percentage
+    from three days ago is drawn like one from three minutes ago."""
+    import os
+    from usage import fetch_codex_usage
+
+    root = tmp_path / "codex"
+    rollout = root / "sessions" / "2026" / "07" / "30" / "rollout-2026-07-30T10-00-00-abc.jsonl"
+    _write_jsonl(rollout, [
+        {"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
+            "primary": {"window_minutes": 10080, "used_percent": 19.0, "resets_at": None},
+        }}},
+    ])
+    stamp = time.time() - 3 * 86400
+    os.utime(rollout, (stamp, stamp))
+
+    usage = fetch_codex_usage(root=root)
+    assert usage.error is None
+    assert usage.windows and usage.windows[0].pct == 19.0
+    assert usage.read_at is not None
+    assert abs(usage.read_at.timestamp() - stamp) < 2

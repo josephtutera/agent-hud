@@ -23,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The daemon we spawned, if we did, so we can stop it again on quit and not
     /// leave an orphan behind.
     private var daemonProcess: Process?
+    /// Restarts the daemon if it dies. Without it, one crash meant an offline
+    /// HUD until the app itself was relaunched.
+    private var supervision = DaemonSupervision()
+    private var supervisionTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Launching the app is all it takes: bring up the data daemon ourselves
@@ -51,6 +55,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.renderGlance() }
             .store(in: &cancellables)
+
+        startSupervisingDaemon()
+    }
+
+    /// Notice when the daemon has gone away and bring it back.
+    ///
+    /// The check is cheap — the store already knows whether it is getting a
+    /// snapshot — and the schedule backs off, so a machine where the daemon can
+    /// never start (its port held by something else, say) settles at one attempt
+    /// every few minutes rather than spawning a process every tick.
+    private func startSupervisingDaemon() {
+        supervisionTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.superviseDaemon() }
+        }
+    }
+
+    private func superviseDaemon() {
+        // Reachability, not `isOffline`: a dead daemon still leaves a readable
+        // cache file, so the card keeps showing numbers and would never look
+        // offline. Only the HTTP read failing says the daemon itself is gone.
+        guard !store.isDaemonReachable else {
+            supervision.noteHealthy()
+            return
+        }
+        let now = Date()
+        guard supervision.shouldAttempt(
+            daemonUnreachable: true,
+            daemonIsRunning: daemonProcess?.isRunning ?? false,
+            now: now
+        ) else { return }
+
+        let spawned = DaemonLauncher.ensureRunning()
+        if spawned != nil { daemonProcess = spawned }
+        // `ensureRunning` returns nil both when a daemon was already answering
+        // and when it could not find one to start, so reachability is what says
+        // whether this worked.
+        supervision.recordAttempt(succeeded: spawned != nil || DaemonLauncher.isReachable(), now: now)
     }
 
     /// Rasterize the glance to a plain (non-template) NSImage.
@@ -97,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         removeDismissMonitors()
+        supervisionTimer?.invalidate()
         store.stop()
         // Only stop the daemon if we started it; leave a user-run one alone.
         daemonProcess?.terminate()

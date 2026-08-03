@@ -9,7 +9,14 @@ import SwiftUI
 public final class HUDStore: ObservableObject {
     @Published public private(set) var snapshot: HUDSnapshot?
     @Published public private(set) var now: Date = Date()
+    /// No data at all: neither the daemon nor its cache file could be read.
     @Published public private(set) var isOffline: Bool = true
+    /// Whether the last read came from the daemon rather than from its cache
+    /// file on disk. These are different questions: a dead daemon still leaves a
+    /// readable cache, so the card keeps showing numbers (with their age, which
+    /// is what `read_at` is for) while `isOffline` stays false. Only this says
+    /// the daemon itself needs restarting.
+    @Published public private(set) var isDaemonReachable: Bool = false
 
     private let endpoint = URL(string: "http://127.0.0.1:8737/v1/hud")!
     private let cacheURL: URL = FileManager.default
@@ -59,9 +66,11 @@ public final class HUDStore: ObservableObject {
 
     public func refresh() async {
         if let fresh = await fetchFromDaemon() {
+            isDaemonReachable = true
             apply(fresh)
             return
         }
+        isDaemonReachable = false
         if let cached = readFromCache() {
             apply(cached)
             return
