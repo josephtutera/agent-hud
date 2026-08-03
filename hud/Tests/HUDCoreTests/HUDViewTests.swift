@@ -47,40 +47,6 @@ final class HUDViewTests: XCTestCase {
         XCTAssertEqual(sub(windows: []).glanceRings.count, 0)
     }
 
-    // MARK: - What a pod headlines, and the second clock beside it
-
-    func testTheHeadlineIsTheTightestWindow() {
-        var s = sub(windows: [session, weekly, fable])
-        s = Subscription(id: s.id, provider: s.provider, label: s.label, windows: s.windows,
-                         tightest: fable, stale: nil, activeAgents: 0)
-        XCTAssertEqual(s.leadWindow?.kind, "weekly_fable")  // 12% beats 40% and 61%
-    }
-
-    func testTheSessionClockGetsItsOwnLineWhenAWeeklyIsTheHeadline() {
-        // The usual case: a weekly limit is tightest, so the big number is that,
-        // but the 5h window recovers on a completely different schedule and is
-        // what decides whether you can keep working in the next hour.
-        var s = sub(windows: [session, weekly, fable])
-        s = Subscription(id: s.id, provider: s.provider, label: s.label, windows: s.windows,
-                         tightest: fable, stale: nil, activeAgents: 0)
-        XCTAssertEqual(s.secondarySessionWindow?.kind, "session_5h")
-    }
-
-    func testTheSessionClockIsNotRepeatedWhenItIsAlreadyTheHeadline() {
-        var s = sub(windows: [session, weekly])
-        s = Subscription(id: s.id, provider: s.provider, label: s.label, windows: s.windows,
-                         tightest: session, stale: nil, activeAgents: 0)
-        XCTAssertNil(s.secondarySessionWindow)
-    }
-
-    func testAPlanWithNoSessionLimitHasNoSecondClock() {
-        // Codex reports one weekly limit and nothing else.
-        var s = sub(windows: [codexWeekly])
-        s = Subscription(id: s.id, provider: "codex", label: s.label, windows: s.windows,
-                         tightest: codexWeekly, stale: nil, activeAgents: 0)
-        XCTAssertNil(s.secondarySessionWindow)
-    }
-
     func testWeekly7dNeverReturnsFable() {
         XCTAssertEqual(sub(windows: [session, fable]).weekly7dWindow?.kind, nil)
         XCTAssertEqual(sub(windows: [session, fable, weekly]).weekly7dWindow?.kind, "weekly_7d")

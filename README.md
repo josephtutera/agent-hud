@@ -90,6 +90,18 @@ python3 -m pytest tests         # the daemon: collectors, usage, pricing, snapsh
 | `hud/Sources/HUDCore` | contract structs, theme, formatting, and every SwiftUI view |
 | `hud/Sources/agenthud-hud` | the AppKit shell: status item, panel, daemon launcher |
 
+## The card
+
+Three sections, each a plain list: **LIMITS**, **SETUP**, **VALUE AT API RATES**.
+
+A limits row is one window on one plan — what it is, a fuel bar for how much is
+left, the number, and when it comes back. It used to be three pods each
+headlining "the window with the least headroom", and that number was the
+problem: which window it quoted moved with whatever happened to be tightest, so
+the same big figure meant the 5-hour session on one plan and the Fable weekly on
+another, and the reset line under it moved too. There is no headline now, and
+nothing shifts.
+
 ## The menu bar
 
 One concentric ring cluster per subscription, and a single amber dot when the

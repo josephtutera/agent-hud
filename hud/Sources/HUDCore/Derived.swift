@@ -52,26 +52,6 @@ extension Subscription {
         sessionWindow ?? tightest ?? windows.first
     }
 
-    /// The window a pod headlines: the one with the least headroom, i.e. the one
-    /// about to bite. The fallbacks only matter for a subscription that reports
-    /// no percentages at all.
-    public var leadWindow: Window? { tightest ?? sessionWindow ?? windows.first }
-
-    /// The 5-hour session window, when the pod is not already headlining it.
-    ///
-    /// The big number is whichever limit is tightest, which is usually a weekly
-    /// one — but the session window is what decides whether you can keep working
-    /// in the next hour, and when it recovers is a different answer from when the
-    /// weekly does. So it earns its own line rather than being reachable only by
-    /// reading the meter rows, which carry percentages and no clock.
-    ///
-    /// Nil when the plan has no session limit (Codex), or when the headline is
-    /// already the session window and a second line would just repeat it.
-    public var secondarySessionWindow: Window? {
-        guard let session = sessionWindow, session.kind != leadWindow?.kind else { return nil }
-        return session
-    }
-
     /// How old a reading is allowed to be before the pod says so. Claude is
     /// re-read every three minutes, so anything past this means something is
     /// wrong — a cooldown, a dead daemon, a machine just back from sleep — or,
