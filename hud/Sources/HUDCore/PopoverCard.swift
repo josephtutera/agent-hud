@@ -185,13 +185,15 @@ struct PodView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(resetCaption)
                     .font(Theme.label(9))
-                    .foregroundStyle(Theme.faint)
+                    .foregroundStyle(Theme.text)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 if let sessionCaption {
                     Text(sessionCaption)
                         .font(Theme.label(9))
                         .foregroundStyle(Theme.faint)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
             }
 
@@ -249,11 +251,19 @@ struct PodView: View {
     }
 
     /// When the headline window rolls over, as a day and clock time rather than
-    /// a countdown: the countdown belongs in the menu bar, where you glance at
-    /// it; here you are deciding whether to wait, which is a question about when.
+    /// a countdown: you are deciding whether to wait, which is a question about
+    /// when, not about how long.
+    ///
+    /// Named, because *which* window this is changes with whichever limit is
+    /// tightest. Unlabelled it read as "resets Mon 1:40a" on a plan whose
+    /// headline was the 5-hour window and on one whose headline was Fable, and
+    /// the only way to tell them apart was to match the big number against the
+    /// meter rows below.
     private var resetCaption: String {
-        guard let reset = leadWindow?.resetsAt else { return "no reset reported" }
-        return "resets \(Fmt.dayClock(reset, now: now))"
+        guard let window = leadWindow else { return "no reset reported" }
+        let name = Fmt.windowName(kind: window.kind)
+        guard let reset = window.resetsAt else { return "\(name) reset unknown" }
+        return "\(name) resets \(Fmt.dayClock(reset, now: now))"
     }
 
     /// The 5-hour session clock, when the headline is some other window. Weekly
