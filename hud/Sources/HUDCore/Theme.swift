@@ -26,6 +26,15 @@ public enum Theme {
     public static let green    = dynamic(light: 0x1E9E4A, dark: 0x34C759)
     public static let red      = dynamic(light: 0xDA3A3F, dark: 0xFF5F57)
 
+    // A problem row's own surface: amber washed into the card so a row that
+    // needs attention reads as a block rather than as coloured text.
+    public static let warnSurface = dynamic(light: 0xFDF5E6, dark: 0x1E1A12)
+    public static let warnBorder  = dynamic(light: 0xEBD9B4, dark: 0x3A2F17)
+    // A copyable command sits in a chip that reads as terminal: recessed on the
+    // dark card, raised (white, hairlined) on the light one.
+    public static let chip        = dynamic(light: 0xFFFFFF, dark: 0x0B0C0E)
+    public static let chipBorder  = dynamic(light: 0xE4E6EB, dark: 0x0B0C0E)
+
     // Brand marks. Coral deepens slightly on white so the Claude mark holds
     // contrast; the Codex mark draws in `text` on the card (see providerColor).
     public static let claudeCoral = dynamic(light: 0xC15F3C, dark: 0xD97757)

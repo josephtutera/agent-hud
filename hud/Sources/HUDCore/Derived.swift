@@ -83,11 +83,9 @@ extension Agent {
     public var isIdle: Bool { !isWaiting && !isWorking }
 }
 
-/// Assigns one distinct color per running agent. Agents are colored in pid
-/// order so the mapping is deterministic across polls and every currently
-/// visible agent gets a different hue (until the palette wraps). Both the notch
-/// face and the dropdown list resolve through here, so a color in the bar maps
-/// to the same-colored row in the card.
+/// Assigns one distinct color per running agent, in pid order so the mapping is
+/// deterministic across polls and every visible agent gets a different hue
+/// (until the palette wraps).
 public enum AgentColors {
     public static func assign(_ agents: [Agent]) -> [Int: Color] {
         var map: [Int: Color] = [:]
@@ -112,37 +110,17 @@ extension HUDSnapshot {
         agents.filter { $0.isWaiting }.count
     }
 
-    /// Agents the card actually shows: currently working or waiting. Idle and
-    /// stale sessions are dropped so the list can't go out of date — it only
-    /// ever holds live work, ordered as the daemon sent it.
+    /// Agents that count as live: currently working or waiting. Idle and stale
+    /// sessions are dropped, so a count built on this can't go out of date.
     public var runningAgents: [Agent] {
         agents.filter { !$0.isIdle }
     }
 
     /// The single tightest window across every subscription, spent limits
-    /// included, for the one severity ring the compact collapsed face carries so
-    /// a plan running dry still warns from the menu bar without the full card.
+    /// included: the one number that answers "is anything about to run out".
     public var worstWindow: Window? {
         subscriptions
             .compactMap { $0.tightest }
             .min { ($0.pctLeft ?? 101) < ($1.pctLeft ?? 101) }
-    }
-
-    /// The single tightest *live* window across all subscriptions, with its
-    /// owning sub, used for the one pace line under the card's meters. Spent
-    /// limits (0% left) are excluded: a "dry at" projection is meaningless for
-    /// a window that is already dead, so pace belongs to the tightest window
-    /// that still has headroom.
-    public var overallTightest: (sub: Subscription, window: Window)? {
-        var best: (Subscription, Window)?
-        for sub in subscriptions {
-            guard let t = sub.tightest, let pct = t.pctLeft, pct > 0 else { continue }
-            if let (_, bw) = best, let bp = bw.pctLeft, bp <= pct { continue }
-            best = (sub, t)
-        }
-        // tightest carries no pace; find the matching window that does.
-        guard let (sub, t) = best else { return nil }
-        let full = sub.windows.first { $0.kind == t.kind } ?? t
-        return (sub, full)
     }
 }

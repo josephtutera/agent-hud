@@ -91,12 +91,91 @@ extension HUDSnapshot {
         )
 
         return HUDSnapshot(
-            version: 1,
+            version: 2,
             generatedAt: previewNow,
-            subscriptions: [team, personal, codex],
+            subscriptions: [personal, team, codex],
             agents: agents,
             value: value,
-            soonestReset: SoonestReset(subscriptionID: "codex", kind: "session_5h", resetsAt: at(38))
+            soonestReset: SoonestReset(subscriptionID: "codex", kind: "session_5h", resetsAt: at(38)),
+            setup: .sampleWithProblems
+        )
+    }()
+}
+
+// The setup block in both of its interesting states. Problems are the sample the
+// preview render uses, since a card is only worth reviewing in the state that
+// has something to show.
+extension SetupBlock {
+    static let sampleWithProblems = SetupBlock(
+        version: 1,
+        generatedAt: HUDSnapshot.previewNow.addingTimeInterval(-12),
+        problems: 2,
+        sections: [
+            .ok("shared instructions, skills and memory are linked into the repo", "links", "8 links"),
+            .ok("Codex has a link for every skill, and none left over", "codex skills", "15 skills"),
+            SetupSectionResult(
+                title: "every Claude account behaves the same",
+                label: "accounts",
+                summary: "model",
+                status: "problem",
+                results: [SetupResult(
+                    status: "problem",
+                    message: ".claude-team differs from ~/.claude in: model",
+                    fix: "decide which is right, apply it to both, then",
+                    fixCommand: "bin/capture.sh"
+                )]
+            ),
+            .ok("every harness wakes the memory", "memory", "3 harnesses"),
+            .ok("every CLI the instructions promise is installed", "CLI contract", "12 on PATH"),
+            .ok("every shared MCP server is registered in both harnesses", "MCP contract", "5 in both"),
+            SetupSectionResult(
+                title: "everything the manifest tracks is captured",
+                label: "captured",
+                summary: "3 files",
+                status: "problem",
+                results: [SetupResult(
+                    status: "problem",
+                    message: "the machine is ahead of the repo for: .claude/settings.json, .codex/config.toml, .copilot/config.json",
+                    fix: "",
+                    fixCommand: "bin/capture.sh"
+                )]
+            ),
+            .ok("the repo is committed and pushed", "pushed", "main"),
+        ]
+    )
+
+    static let sampleAllClear = SetupBlock(
+        version: 1,
+        generatedAt: HUDSnapshot.previewNow.addingTimeInterval(-12),
+        problems: 0,
+        sections: sampleWithProblems.sections.map {
+            SetupSectionResult(title: $0.title, label: $0.label,
+                               summary: $0.summary, status: "ok", results: [])
+        }
+    )
+}
+
+extension SetupSectionResult {
+    static func ok(_ title: String, _ label: String, _ summary: String) -> SetupSectionResult {
+        SetupSectionResult(title: title, label: label, summary: summary, status: "ok",
+                           results: [SetupResult(status: "ok", message: summary)])
+    }
+}
+
+// A day when nothing is wrong: the state the setup panel is in almost always,
+// and a different layout rather than the same one with fewer rows. The menu bar
+// shows no dot at all here.
+extension HUDSnapshot {
+    public static let sampleAllClear: HUDSnapshot = {
+        let s = HUDSnapshot.sample
+        return HUDSnapshot(
+            version: s.version,
+            generatedAt: s.generatedAt,
+            subscriptions: s.subscriptions,
+            agents: s.agents,
+            value: s.value,
+            soonestReset: s.soonestReset,
+            setup: .sampleAllClear
         )
     }()
 }

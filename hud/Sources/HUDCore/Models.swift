@@ -1,7 +1,7 @@
 import Foundation
 
 // Codable structs mirroring the daemon contract served at
-// http://127.0.0.1:8737/v1/hud (version 1). Field names match the JSON
+// http://127.0.0.1:8737/v1/hud (version 2). Field names match the JSON
 // exactly; do not rename them. Anything the daemon may omit or send as null
 // is modeled as an Optional so decoding never throws on a sparse snapshot.
 
@@ -12,6 +12,10 @@ public struct HUDSnapshot: Codable, Equatable {
     public let agents: [Agent]
     public let value: ValueBlock?
     public let soonestReset: SoonestReset?
+    /// Whether the shared agent setup is healthy. Optional so a v1 snapshot —
+    /// written by a daemon that predates this, or by one whose `~/.agents` has
+    /// no `--json` yet — still decodes. `nil` means *unknown*, never healthy.
+    public let setup: SetupBlock?
 
     enum CodingKeys: String, CodingKey {
         case version
@@ -20,6 +24,7 @@ public struct HUDSnapshot: Codable, Equatable {
         case agents
         case value
         case soonestReset = "soonest_reset"
+        case setup
     }
 
     public init(
@@ -28,7 +33,8 @@ public struct HUDSnapshot: Codable, Equatable {
         subscriptions: [Subscription],
         agents: [Agent],
         value: ValueBlock?,
-        soonestReset: SoonestReset?
+        soonestReset: SoonestReset?,
+        setup: SetupBlock? = nil
     ) {
         self.version = version
         self.generatedAt = generatedAt
@@ -36,6 +42,7 @@ public struct HUDSnapshot: Codable, Equatable {
         self.agents = agents
         self.value = value
         self.soonestReset = soonestReset
+        self.setup = setup
     }
 }
 
@@ -210,6 +217,118 @@ public struct SubValue: Codable, Equatable {
     public init(todayUSD: Double, monthUSD: Double) {
         self.todayUSD = todayUSD
         self.monthUSD = monthUSD
+    }
+}
+
+// MARK: - Setup health
+
+/// The findings of `~/.agents/bin/check-setup.sh --json`, passed through by the
+/// daemon verbatim. `version` here is that script's own contract version, not
+/// the snapshot's.
+public struct SetupBlock: Codable, Equatable {
+    public let version: Int
+    public let generatedAt: Date?
+    public let problems: Int
+    public let sections: [SetupSectionResult]
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case generatedAt = "generated_at"
+        case problems
+        case sections
+    }
+
+    public init(version: Int, generatedAt: Date?, problems: Int, sections: [SetupSectionResult]) {
+        self.version = version
+        self.generatedAt = generatedAt
+        self.problems = problems
+        self.sections = sections
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        // This block crosses a repo boundary, so a timestamp in a shape this
+        // build cannot parse must cost the timestamp and nothing else — losing
+        // the whole snapshot over it would blank the quota bars too.
+        generatedAt = try? c.decodeIfPresent(Date.self, forKey: .generatedAt)
+        problems = try c.decode(Int.self, forKey: .problems)
+        sections = try c.decode([SetupSectionResult].self, forKey: .sections)
+    }
+
+    public var isClean: Bool { problems == 0 }
+}
+
+/// One section of the gate: a group of related checks. `label` is the short name
+/// a row shows; `title` is the full sentence the terminal prints, kept so the
+/// panel and the terminal describe the same thing.
+public struct SetupSectionResult: Codable, Equatable, Identifiable {
+    public let title: String
+    public let label: String
+    public let summary: String
+    public let status: String  // "ok" | "problem"
+    public let results: [SetupResult]
+
+    public var id: String { title }
+    public var isProblem: Bool { status == "problem" }
+
+    /// The failing results, which is all a row shows: a section that is fine
+    /// says so with its summary and takes one line.
+    public var problems: [SetupResult] { results.filter(\.isProblem) }
+
+    public init(title: String, label: String, summary: String, status: String, results: [SetupResult]) {
+        self.title = title
+        self.label = label
+        self.summary = summary
+        self.status = status
+        self.results = results
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = try c.decode(String.self, forKey: .title)
+        // A check-setup that names a section but not its short form still has to
+        // render, so the sentence stands in for the label rather than blanking it.
+        label = try c.decodeIfPresent(String.self, forKey: .label) ?? title
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        status = try c.decode(String.self, forKey: .status)
+        results = try c.decodeIfPresent([SetupResult].self, forKey: .results) ?? []
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case title, label, summary, status, results
+    }
+}
+
+/// One check. `fix` is the prose half and `fixCommand` the runnable half, split
+/// by the emitter so the panel does not have to guess which words are a command.
+public struct SetupResult: Codable, Equatable, Identifiable {
+    public let status: String  // "ok" | "problem"
+    public let message: String
+    public let fix: String
+    public let fixCommand: String
+
+    public var id: String { message }
+    public var isProblem: Bool { status == "problem" }
+
+    enum CodingKeys: String, CodingKey {
+        case status, message, fix
+        case fixCommand = "fix_command"
+    }
+
+    public init(status: String, message: String, fix: String = "", fixCommand: String = "") {
+        self.status = status
+        self.message = message
+        self.fix = fix
+        self.fixCommand = fixCommand
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = try c.decode(String.self, forKey: .status)
+        message = try c.decode(String.self, forKey: .message)
+        fix = try c.decodeIfPresent(String.self, forKey: .fix) ?? ""
+        fixCommand = try c.decodeIfPresent(String.self, forKey: .fixCommand) ?? ""
     }
 }
 

@@ -1,8 +1,9 @@
 # agent-hud
 
-A macOS menu-bar readout for the two things that decide whether a working day
-goes well: how much subscription quota is left across Claude and Codex, and
-whether the shared agent setup in `~/.agents` is still healthy.
+A macOS menu-bar readout for the three things that decide whether a working day
+goes well: how much subscription quota is left across Claude and Codex, what
+that usage would have cost at API rates, and whether the shared agent setup in
+`~/.agents` is still healthy.
 
 It is read-only. Nothing in here mutates the machine; the worst it can do is
 tell you to go run something yourself.
@@ -54,7 +55,8 @@ The card renders headlessly to a PNG from a committed fixture snapshot, so a
 reviewer can see the UI without running the menu bar:
 
 ```sh
-swift run agenthud-hud --render-preview preview.png
+swift run agenthud-hud --render-preview preview.png            # a day with problems
+swift run agenthud-hud --render-preview-clear preview-all-clear.png
 swift run agenthud-hud --render-preview-light preview-light.png
 swift run agenthud-hud --render-preview-menubar preview-menubar.png
 ```
@@ -74,10 +76,26 @@ python3 -m pytest tests         # the daemon: collectors, usage, pricing, snapsh
 | `usage.py` | Claude usage over OAuth (with Keychain token refresh and 429 backoff), Codex from rollout files, OpenCode spend |
 | `pricing.py` | what the same usage would have cost at published API rates |
 | `agents.py` / `activity.py` | which agent sessions are running, and what each is doing |
+| `subscriptions.py` | which Claude organizations this machine is signed into, and what to call them |
+| `setup_health.py` | runs `~/.agents/bin/check-setup.sh --json` and folds the answer in |
 | `collectors.py` / `models.py` | the shared session model the collectors are built on |
 | `docs/hud-schema.md` | the frozen snapshot contract the Swift app decodes |
 | `hud/Sources/HUDCore` | contract structs, theme, formatting, and every SwiftUI view |
 | `hud/Sources/agenthud-hud` | the AppKit shell: status item, panel, daemon launcher |
+
+## Setup health
+
+The panel is a passthrough of `~/.agents/bin/check-setup.sh --json`, which is the
+same gate a human runs in a terminal. The daemon performs no checks of its own,
+so the panel and the terminal cannot drift apart.
+
+It fails closed. The check exiting non-zero is *success* — that is how it reports
+problems — but anything meaning "we could not ask" (no script, a script that
+predates `--json`, a crash, a hang, output that is not the contract) produces no
+block at all, and the card says **setup unknown** rather than showing a green
+panel nobody established. The daemon clears the block on a failed poll rather
+than holding the last good answer, so the card can never show yesterday's
+all-clear.
 
 ## Safety
 

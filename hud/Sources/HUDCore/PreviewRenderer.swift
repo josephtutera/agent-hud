@@ -44,6 +44,23 @@ public enum PreviewRenderer {
         return try write(content, to: url, scale: scale, opaque: true)
     }
 
+    /// Renders the card on a day when nothing is wrong. Worth its own artifact
+    /// because the all-clear is the state the panel is in almost always, and it
+    /// is a different layout rather than the same one with fewer rows.
+    @discardableResult
+    public static func renderAllClearPNG(
+        to url: URL,
+        scale: CGFloat = 2,
+        colorScheme: ColorScheme = .dark
+    ) throws -> URL {
+        try renderCardPNG(
+            snapshot: .sampleAllClear,
+            to: url,
+            scale: scale,
+            colorScheme: colorScheme
+        )
+    }
+
     /// Renders the menu-bar glance (status-item content) beside its dropdown
     /// card over a desktop-gray backdrop, so reviewers see both the collapsed
     /// glance and the click-through card in one image.
