@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Redraws it when the menu bar changes appearance, which the snapshot knows
     /// nothing about.
     private var appearanceObserver: NSKeyValueObservation?
+    /// Mouse monitors that collapse the card on a click outside it. Only alive
+    /// while the card is open.
+    private var dismissMonitors: [Any] = []
     /// The daemon we spawned, if we did, so we can stop it again on quit and not
     /// leave an orphan behind.
     private var daemonProcess: Process?
@@ -93,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        removeDismissMonitors()
         store.stop()
         // Only stop the daemon if we started it; leave a user-run one alone.
         daemonProcess?.terminate()
@@ -106,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         if let panel, panel.isVisible {
-            panel.orderOut(nil)
+            hidePanel()
             return
         }
         showPanel()
@@ -133,6 +137,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Card panel
+
+    private func hidePanel() {
+        panel?.orderOut(nil)
+        removeDismissMonitors()
+    }
+
+    /// Watch for the click that means "I am done looking at this".
+    ///
+    /// The card is a non-activating panel, so it never becomes key and there is
+    /// no resignKey to hang this on. Two monitors cover the two halves: a global
+    /// one for clicks that land in another app or on the desktop, and a local one
+    /// for clicks inside this app, where most of them must *not* dismiss.
+    ///
+    /// They only exist while the card is open, so nothing is watching the mouse
+    /// the rest of the time.
+    private func installDismissMonitors() {
+        removeDismissMonitors()
+
+        let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
+
+        let global = NSEvent.addGlobalMonitorForEvents(matching: clicks) { [weak self] _ in
+            MainActor.assumeIsolated { self?.hidePanel() }
+        }
+        if let global { dismissMonitors.append(global) }
+
+        // The event is read for its window and then handed straight back:
+        // dismissing is not the same as swallowing the click that caused it, and
+        // NSEvent must not cross out of the main actor, so only the window does.
+        let local = NSEvent.addLocalMonitorForEvents(matching: clicks) { [weak self] event in
+            let clickedWindow = event.window
+            MainActor.assumeIsolated { self?.dismissIfOutside(clickedWindow) }
+            return event
+        }
+        if let local { dismissMonitors.append(local) }
+    }
+
+    private func dismissIfOutside(_ clickedWindow: NSWindow?) {
+        guard let panel else { return }
+        if PanelDismissal.shouldDismiss(
+            clickedWindow: clickedWindow,
+            panel: panel,
+            statusItemWindow: statusItem?.button?.window
+        ) {
+            hidePanel()
+        }
+    }
+
+    private func removeDismissMonitors() {
+        dismissMonitors.forEach(NSEvent.removeMonitor)
+        dismissMonitors.removeAll()
+    }
 
     private func showPanel() {
         let card = CardHost().environmentObject(store)
@@ -168,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.orderFrontRegardless()
         self.panel = panel
+        installDismissMonitors()
     }
 }
 
