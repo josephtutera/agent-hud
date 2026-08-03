@@ -3,19 +3,22 @@ import SwiftUI
 import AppKit
 #endif
 
-// The click-through card, cockpit layout. Top to bottom: a slim header, a gauge
-// cluster (one pod per subscription with a big session readout + fuel bar), a
-// pace-warning strip, the active agents, a value strip, and a footer. Colors are
-// the dynamic Theme tokens, so the whole card follows the system light/dark
-// appearance. Width 460, radius 14, hairline border.
+// The click-through card. Top to bottom: a slim header, one pod per subscription
+// showing every window it reports, the setup panel, the API-value strip, and a
+// footer. Colors are the dynamic Theme tokens, so the whole card follows the
+// system light/dark appearance. Width 520, radius 16, hairline border.
 
 public struct PopoverCard: View {
     public let snapshot: HUDSnapshot?
     public var now: Date
+    /// Called when the footer's refresh is pressed. Nil in previews and tests,
+    /// which is why the control is a seam rather than a direct call into the store.
+    public var onRefresh: (() -> Void)?
 
-    public init(snapshot: HUDSnapshot?, now: Date = Date()) {
+    public init(snapshot: HUDSnapshot?, now: Date = Date(), onRefresh: (() -> Void)? = nil) {
         self.snapshot = snapshot
         self.now = now
+        self.onRefresh = onRefresh
     }
 
     private var orderedSubs: [Subscription] {
@@ -27,26 +30,24 @@ public struct PopoverCard: View {
             if let snap = snapshot {
                 CardHeaderView(now: now)
                 GaugeClusterView(subs: orderedSubs, now: now)
-                if let tight = snap.overallTightest, let pace = tight.window.pace {
-                    PaceStripView(sub: tight.sub, pace: pace, now: now)
-                }
-                AgentsSectionView(agents: snap.runningAgents, now: now)
+                SetupSection(setup: snap.setup)
                 if let value = snap.value {
-                    ValueStripView(value: value, now: now)
+                    ValueStripView(value: value, subs: orderedSubs, now: now)
                 }
-                FooterView(generatedAt: snap.generatedAt, now: now)
+                FooterView(setup: snap.setup, generatedAt: snap.generatedAt,
+                           now: now, onRefresh: onRefresh)
             } else {
                 OfflineView()
             }
         }
-        .padding(16)
-        .frame(width: 460, alignment: .leading)
+        .padding(22)
+        .frame(width: 520, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Theme.panel)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Theme.hairline, lineWidth: 1)
         )
     }
@@ -60,7 +61,7 @@ struct CardHeaderView: View {
     let now: Date
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 14) {
             Text("AGENT HUD")
                 .font(Theme.label(11, weight: .semibold))
                 .tracking(2.0)
@@ -124,22 +125,29 @@ struct GaugeClusterView: View {
     }
 }
 
-/// One plan's gauge pod: mark + short name, the big session percent, a fuel bar
-/// (filled by consumed, severity-colored), and a two-line caption (session
-/// detail, then the weekly window with a red flag if an extra/Fable limit is
-/// spent). When the session window is pressured (< 25% left) the whole pod
-/// lights in its severity color, the way a dashboard warning lamp does.
+/// One plan's pod: mark + short name, the big number for the window with the
+/// least headroom, when that window resets, then a meter row for every window
+/// the subscription reports. Every window is shown because a Claude plan has
+/// three and a Codex plan has one, and a card that only draws the 5-hour window
+/// silently hides whichever limit you are actually about to hit. The tightest
+/// row is the one drawn at full contrast, since it is the number the big figure
+/// is quoting.
+///
+/// When that window is pressured (< 25% left) the whole pod lights in its
+/// severity color, the way a dashboard warning lamp does.
 struct PodView: View {
     let sub: Subscription
     let now: Date
 
-    private var sessionWindow: Window? { sub.sessionWindow ?? sub.tightest ?? sub.windows.first }
-    private var sessionPct: Int? { sessionWindow?.pctLeft }
-    private var severity: Color { Theme.severity(pctLeft: sessionPct) }
+    /// The window the pod headlines. `tightest` is the daemon's own answer; the
+    /// fallbacks only matter for a subscription reporting no percentages at all.
+    private var leadWindow: Window? { sub.tightest ?? sub.sessionWindow ?? sub.windows.first }
+    private var leadPct: Int? { leadWindow?.pctLeft }
+    private var severity: Color { Theme.severity(pctLeft: leadPct) }
 
-    /// Lit when the session window is amber/red (pressured), i.e. < 25% left.
+    /// Lit when the lead window is amber/red (pressured), i.e. < 25% left.
     private var isLit: Bool {
-        guard let p = sessionPct else { return false }
+        guard let p = leadPct else { return false }
         return p < 25
     }
 
@@ -147,23 +155,28 @@ struct PodView: View {
         if sub.label.hasPrefix("Claude ") {
             return String(sub.label.dropFirst("Claude ".count))
         }
-        if sub.provider == "codex" { return "Codex" }
         return sub.label
     }
 
+    private var dotColor: Color {
+        sub.provider == "codex" ? Theme.codexGreen : Theme.claudeCoral
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                BrandMark(provider: sub.provider, size: 12, tint: Theme.providerColor(sub.provider))
-                Text(shortName.uppercased())
+                Circle().fill(dotColor).frame(width: 7, height: 7)
+                Text(sub.label.uppercased())
                     .font(Theme.label(9, weight: .semibold))
                     .tracking(1.0)
                     .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(Fmt.glancePercent(pctLeft: sessionPct))
-                    .font(Theme.mono(32, weight: .semibold))
+                Text(Fmt.glancePercent(pctLeft: leadPct))
+                    .font(Theme.mono(34, weight: .bold))
                     .foregroundStyle(isLit ? severity : Theme.text)
                     .monospacedDigit()
                 Text("%")
@@ -171,197 +184,104 @@ struct PodView: View {
                     .foregroundStyle(isLit ? severity.opacity(0.7) : Theme.muted)
             }
 
-            PodFuelBar(pctLeft: sessionPct)
+            Text(resetCaption)
+                .font(Theme.label(9))
+                .foregroundStyle(Theme.faint)
+                .lineLimit(1)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(sessionCaption)
-                    .font(Theme.mono(9.5))
-                    .foregroundStyle(Theme.muted)
-                weeklyCaption
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(Array(sub.windows.enumerated()), id: \.offset) { _, window in
+                    PodMeterRow(window: window, isLead: window.kind == leadWindow?.kind)
+                }
+                if sub.sessionWindow == nil {
+                    // Codex reports only a weekly limit. Saying so beats leaving
+                    // a reader to wonder where the session row went.
+                    Text("no session limit")
+                        .font(Theme.label(9))
+                        .foregroundStyle(Theme.faint)
+                        .padding(.top, 1)
+                }
+                if sub.activeAgents > 0 {
+                    HStack(spacing: 5) {
+                        Circle().fill(Theme.agentColor(1)).frame(width: 5, height: 5)
+                        Text(sub.activeAgents == 1 ? "1 agent" : "\(sub.activeAgents) agents")
+                            .font(Theme.label(10))
+                            .foregroundStyle(Theme.muted)
+                    }
+                    .padding(.top, 3)
+                }
+                if let stale = sub.stale {
+                    Text(stale)
+                        .font(Theme.label(9))
+                        .foregroundStyle(Theme.amber)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 3)
+                }
             }
+            .padding(.top, 3)
         }
-        .padding(12)
+        .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(isLit ? severity.opacity(0.10) : Theme.panel2)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(isLit ? severity.opacity(0.40) : Theme.hairline, lineWidth: 1)
         )
     }
 
-    private var sessionCaption: String {
-        guard let w = sessionWindow else { return "" }
-        let label = Fmt.windowLabel(kind: w.kind)
-        if let reset = w.resetsAt {
-            return "\(label) · \(Fmt.countdown(to: reset, now: now)) left"
-        }
-        return label
-    }
-
-    @ViewBuilder
-    private var weeklyCaption: some View {
-        let fableMaxed = sub.fableWindow?.isLimitReached ?? false
-        HStack(spacing: 0) {
-            Text(weeklyText)
-                .font(Theme.mono(9.5))
-                .foregroundStyle(Theme.faint)
-            if fableMaxed {
-                Text(" · ")
-                    .font(Theme.mono(9.5))
-                    .foregroundStyle(Theme.faint)
-                Text("F maxed")
-                    .font(Theme.mono(9.5))
-                    .foregroundStyle(Theme.red)
-            }
-        }
-    }
-
-    private var weeklyText: String {
-        guard let w = sub.weekly7dWindow else { return "" }
-        let label = Fmt.windowLabel(kind: w.kind)
-        let pct = w.pctLeft.map { "\($0)%" } ?? "--"
-        return "\(label) · \(pct)"
+    /// When the headline window rolls over, as a day and clock time rather than
+    /// a countdown: the countdown belongs in the menu bar, where you glance at
+    /// it; here you are deciding whether to wait, which is a question about when.
+    private var resetCaption: String {
+        guard let reset = leadWindow?.resetsAt else { return "no reset reported" }
+        return "resets \(Fmt.dayClock(reset, now: now))"
     }
 }
 
-/// A 4pt rounded fuel bar for a pod: fill = consumed fraction, severity-colored.
-struct PodFuelBar: View {
-    let pctLeft: Int?
+/// One window inside a pod: a fixed-width label, a bar filled by how much is
+/// left, and the number. The lead row draws at full contrast; the rest recede,
+/// so the pod reads as one number with its supporting detail.
+struct PodMeterRow: View {
+    let window: Window
+    let isLead: Bool
 
     var body: some View {
-        GeometryReader { geo in
-            let fraction = Fmt.consumed(pctLeft: pctLeft)
-            ZStack(alignment: .leading) {
-                Capsule().fill(Theme.hairline)
-                Capsule()
-                    .fill(Theme.severity(pctLeft: pctLeft))
-                    .frame(width: max(0, min(1, fraction)) * geo.size.width)
-            }
-        }
-        .frame(height: 4)
-    }
-}
-
-// MARK: - Pace strip
-
-/// A one-line warning for the single most-pressured live window across all
-/// plans: when it will run dry at the current pace, and how much margin is left
-/// before its reset saves it.
-struct PaceStripView: View {
-    let sub: Subscription
-    let pace: Pace
-    let now: Date
-
-    var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.amber)
-            (
-                Text("\(sub.label) runs dry ").foregroundStyle(Theme.text)
-                + Text(Fmt.clock(pace.projectedDryAt)).foregroundStyle(Theme.amber).bold()
-                + Text(" at this pace — \(Fmt.sinceLabel(seconds: pace.marginSeconds)) before reset")
-                    .foregroundStyle(Theme.text)
-            )
-            .font(Theme.label(11))
-            .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(Theme.amber.opacity(0.10))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(Theme.amber.opacity(0.22), lineWidth: 1)
-        )
-    }
-}
-
-// MARK: - Agents section
-
-/// The running agents (already filtered to active by `HUDSnapshot.runningAgents`).
-/// Colors are assigned over exactly this set, and the section hides itself when
-/// nothing is running.
-struct AgentsSectionView: View {
-    let agents: [Agent]
-    let now: Date
-
-    private var waiting: Int { agents.filter { $0.isWaiting }.count }
-    private var colors: [Int: Color] { AgentColors.assign(agents) }
-
-    var body: some View {
-        if !agents.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionRule(title: "AGENTS") {
-                    if waiting > 0 {
-                        Text("\(waiting) needs you")
-                            .font(Theme.mono(10))
-                            .foregroundStyle(Theme.amber)
-                            .fixedSize()
-                    }
-                }
-                ForEach(agents) { agent in
-                    AgentRow(agent: agent, color: colors[agent.pid] ?? Theme.toolColor(agent.tool), now: now)
+        HStack(spacing: 5) {
+            Text(Fmt.windowName(kind: window.kind))
+                .font(Theme.label(10))
+                .foregroundStyle(isLead ? Theme.text : Theme.faint)
+                .frame(width: 40, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.hairline)
+                    Capsule()
+                        .fill(Theme.severity(pctLeft: window.pctLeft))
+                        .frame(width: Fmt.remaining(pctLeft: window.pctLeft) * geo.size.width)
                 }
             }
-        }
-    }
-}
-
-struct AgentRow: View {
-    let agent: Agent
-    let color: Color
-    let now: Date
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(color)
-                .frame(width: 7, height: 7)
-
-            Text(agent.project)
-                .font(Theme.label(12, weight: .semibold))
-                .foregroundStyle(Theme.text)
-
-            if let action = agent.action {
-                Text(action)
-                    .font(Theme.label(12))
-                    .foregroundStyle(agent.isWaiting ? Theme.amber : Theme.muted)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
-            Spacer(minLength: 8)
-
-            Text(Fmt.sinceLabel(seconds: agent.sinceSeconds))
-                .font(Theme.mono(11))
-                .foregroundStyle(Theme.muted)
+            .frame(height: 3)
+            Text(Fmt.glancePercent(pctLeft: window.pctLeft))
+                .font(Theme.label(10))
+                .foregroundStyle(isLead ? Theme.text : Theme.muted)
                 .monospacedDigit()
+                .frame(width: 20, alignment: .trailing)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            // Waiting rows get a faint amber wash so they pull the eye.
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(agent.isWaiting ? Theme.amber.opacity(0.10) : Color.clear)
-        )
-        .contentShape(Rectangle())
-        .onTapGesture { AppActions.jumpToAgent(agent) }
     }
 }
 
 // MARK: - Value strip
 
-/// The API-value readout as a trip-computer strip: equal segments for today,
-/// the month, and the value multiple, divided by hairlines.
+/// The API-value readout: three tiles for today, the month, and the multiple
+/// over what the subscriptions cost, then a line per subscription. The
+/// per-subscription split is the part that answers "which plan is doing the
+/// work", which the totals alone cannot.
 struct ValueStripView: View {
     let value: ValueBlock
+    let subs: [Subscription]
     let now: Date
 
     private var monthName: String {
@@ -373,89 +293,180 @@ struct ValueStripView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             SectionRule(title: "VALUE AT API RATES")
-            HStack(spacing: 0) {
-                segment(caption: "TODAY", value: Fmt.usd(value.todayUSD), color: Theme.text)
-                divider
-                segment(caption: monthName, value: Fmt.usd(value.monthUSD), color: Theme.text)
-                divider
-                segment(
-                    caption: "MULTIPLE",
-                    value: value.multiple.map(Fmt.multiple) ?? "--",
-                    color: Theme.green
-                )
+            HStack(spacing: 9) {
+                tile(caption: "TODAY", value: Fmt.usd(value.todayUSD))
+                tile(caption: monthName, value: Fmt.usd(value.monthUSD))
+                multipleTile
             }
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Theme.panel2)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Theme.hairline, lineWidth: 1)
-            )
+            if !bySub.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(bySub, id: \.label) { row in
+                        HStack(spacing: 8) {
+                            Circle().fill(row.color).frame(width: 7, height: 7)
+                            Text(row.label)
+                                .font(Theme.label(12))
+                                .foregroundStyle(row.isSpent ? Theme.text : Theme.faint)
+                            Spacer(minLength: 8)
+                            Text(Fmt.usdExact(row.monthUSD))
+                                .font(Theme.label(12))
+                                .foregroundStyle(row.isSpent ? Theme.text : Theme.faint)
+                                .monospacedDigit()
+                        }
+                    }
+                }
+                .padding(.horizontal, 3)
+            }
         }
     }
 
-    private func segment(caption: String, value: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+    private struct SubRow {
+        let label: String
+        let color: Color
+        let monthUSD: Double
+        /// A plan that spent nothing this month recedes rather than disappearing:
+        /// "this one is idle" is itself worth seeing.
+        var isSpent: Bool { monthUSD > 0 }
+    }
+
+    /// Biggest spender first, so the line that explains the total leads.
+    private var bySub: [SubRow] {
+        subs.compactMap { sub in
+            guard let v = value.bySub[sub.id] else { return nil }
+            let color = sub.provider == "codex" ? Theme.codexGreen : Theme.claudeCoral
+            return SubRow(label: sub.label,
+                          color: v.monthUSD > 0 ? color : Theme.faint,
+                          monthUSD: v.monthUSD)
+        }
+        .sorted { $0.monthUSD > $1.monthUSD }
+    }
+
+    private func tile(caption: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text(caption)
                 .font(Theme.label(9, weight: .semibold))
                 .tracking(1.0)
                 .foregroundStyle(Theme.muted)
             Text(value)
-                .font(Theme.mono(16, weight: .medium))
-                .foregroundStyle(color)
+                .font(Theme.mono(22, weight: .bold))
+                .foregroundStyle(Theme.text)
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.panel2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Theme.hairline, lineWidth: 1)
+        )
     }
 
-    private var divider: some View {
-        Rectangle().fill(Theme.hairline).frame(width: 1)
+    /// The multiple needs to know what the subscriptions cost, which lives in a
+    /// config file nobody has to fill in. Unset, the tile says what to do about
+    /// it rather than showing a dash that reads like a bug.
+    @ViewBuilder
+    private var multipleTile: some View {
+        if let multiple = value.multiple {
+            tile(caption: "MULTIPLE", value: Fmt.multiple(multiple))
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("MULTIPLE")
+                    .font(Theme.label(9, weight: .semibold))
+                    .tracking(1.0)
+                    .foregroundStyle(Theme.muted)
+                Text("set what the subs cost")
+                    .font(Theme.label(12))
+                    .foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    .foregroundStyle(Theme.hairline)
+            )
+        }
     }
 }
 
 // MARK: - Footer
 
+/// When the setup was last checked, a refresh, the copy-for-an-agent button, and
+/// quit. Both new controls are read-only: one re-reads, one writes to the
+/// clipboard. Nothing on this card mutates the machine.
 struct FooterView: View {
+    let setup: SetupBlock?
     let generatedAt: Date?
     let now: Date
+    var onRefresh: (() -> Void)?
+
+    @State private var didCopy = false
 
     var body: some View {
-        HStack {
-            Text("updated \(generatedAt.map(Fmt.clock) ?? "--")")
-                .font(Theme.label(10))
+        HStack(spacing: 12) {
+            Text(checkedLabel)
+                .font(Theme.label(11))
+                .foregroundStyle(Theme.faint)
+                .fixedSize()
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.muted)
-            Spacer()
-            HStack(spacing: 4) {
-                Image(systemName: "power")
-                    .font(.system(size: 9, weight: .semibold))
-                Text("quit")
-                    .font(Theme.label(10))
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+                .onTapGesture { onRefresh?() }
+                .help("Re-read the daemon now")
+            Spacer(minLength: 0)
+            if let setup, !setup.isClean {
+                copyButton(setup: setup)
             }
-            .foregroundStyle(Theme.muted)
-            .contentShape(Rectangle())
-            .onTapGesture { AppActions.quit() }
-            .padding(.trailing, 12)
-            HStack(spacing: 6) {
-                Text("open agent hud")
-                    .font(Theme.label(10))
-                    .foregroundStyle(Theme.muted)
-                Text("⏎")
-                    .font(Theme.mono(10))
-                    .foregroundStyle(Theme.text)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .strokeBorder(Theme.hairline, lineWidth: 1)
-                    )
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { AppActions.openAgentHUD() }
+            Text("quit")
+                .font(Theme.label(11))
+                .foregroundStyle(Theme.muted)
+                .contentShape(Rectangle())
+                .onTapGesture { AppActions.quit() }
         }
-        .padding(.top, 2)
+        .padding(.top, 6)
+    }
+
+    private func copyButton(setup: SetupBlock) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10, weight: .semibold))
+            Text(didCopy ? "copied" : copyLabel(setup.problems))
+                .font(Theme.label(11))
+        }
+        .foregroundStyle(Theme.amber)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.warnSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Theme.warnBorder, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            AppActions.copyToClipboard(SetupClipboard.payload(for: setup, now: now))
+            didCopy = true
+        }
+    }
+
+    private func copyLabel(_ n: Int) -> String {
+        n == 1 ? "copy 1 problem for an agent" : "copy \(n) problems for an agent"
+    }
+
+    /// The setup block carries its own timestamp, which is what "checked" means
+    /// here; the snapshot's own `generated_at` stands in when there is no block.
+    private var checkedLabel: String {
+        guard let stamped = setup?.generatedAt ?? generatedAt else { return "setup not checked" }
+        return "setup checked \(Fmt.ago(stamped, now: now))"
     }
 }
 
@@ -479,31 +490,22 @@ struct OfflineView: View {
 }
 
 /// Side effects the card triggers. Kept behind a seam so the views stay pure
-/// and the tests never shell out.
+/// and the tests never shell out. Every one of these is read-only or writes to
+/// the clipboard: nothing on this card changes the machine.
 public enum AppActions {
-    public static func openAgentHUD() {
+    /// Put the setup problems, and the rules for fixing them properly, on the
+    /// clipboard so they can be pasted into any agent.
+    public static func copyToClipboard(_ text: String) {
         #if canImport(AppKit)
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        proc.arguments = ["-a", "Warp"] // TODO(phase4): real agent-hud target
-        try? proc.run()
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
         #endif
-    }
-
-    /// Jump to a running agent's terminal tab. Wired to the daemon in phase 3;
-    /// for now it surfaces Agent HUD so the click is never a dead end.
-    public static func jumpToAgent(_ agent: Agent) {
-        openAgentHUD()
-    }
-
-    /// Open the new-session launcher (pick a tool + directory). Wired in phase 3.
-    public static func openLauncher() {
-        openAgentHUD()
     }
 
     /// Quit the HUD. There's no dock icon or app menu (it's an accessory app),
     /// so this is the only way out short of `kill`; the footer button and the
-    /// pill's right-click menu both call it.
+    /// status item's right-click menu both call it.
     public static func quit() {
         #if canImport(AppKit)
         NSApplication.shared.terminate(nil)

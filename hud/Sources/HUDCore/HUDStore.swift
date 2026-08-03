@@ -16,6 +16,14 @@ public final class HUDStore: ObservableObject {
         .homeDirectoryForCurrentUser
         .appendingPathComponent(".cache/agenthud/hud.json")
 
+    /// Re-read the daemon now, for the card's refresh control. Read-only: it
+    /// re-reads what the daemon already has, and never asks it to re-poll,
+    /// because the usage endpoint is rate-limited per account and a button that
+    /// could hammer it would eventually cost the readings it is meant to show.
+    public func refreshNow() {
+        Task { await refresh() }
+    }
+
     private let session: URLSession
     private var pollTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?

@@ -106,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hosting = NSHostingController(rootView: AnyView(card))
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 700),
             styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -142,7 +142,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 private struct CardHost: View {
     @EnvironmentObject var store: HUDStore
     var body: some View {
-        PopoverCard(snapshot: store.snapshot, now: store.now)
-            .padding(10)
+        PopoverCard(snapshot: store.snapshot, now: store.now) {
+            store.refreshNow()
+        }
+        .padding(10)
     }
 }

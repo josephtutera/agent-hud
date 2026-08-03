@@ -86,6 +86,52 @@ public enum Fmt {
         }
     }
 
+    /// The name a pod's meter row uses. Longer than `windowLabel` because a pod
+    /// row has space for it, and "fable" says which limit it is where "F" needs
+    /// explaining. Codex's single window is called what it is: the plan has no
+    /// session limit, so calling it "7d" would imply a second window exists.
+    public static func windowName(kind: String) -> String {
+        switch kind {
+        case "session_5h":   return "5h"
+        case "weekly_7d":    return "7d"
+        case "weekly_fable": return "fable"
+        case "weekly":       return "weekly"
+        default:             return kind
+        }
+    }
+
+    /// "Tue 4:00p" — a day and a clock time, for a reset far enough out that a
+    /// countdown says less than a weekday does. Today's resets drop the day.
+    public static func dayClock(_ date: Date, now: Date = Date()) -> String {
+        let calendar = Calendar.current
+        if calendar.isDate(date, inSameDayAs: now) {
+            return clock(date)
+        }
+        let f = DateFormatter()
+        f.dateFormat = "EEE"
+        return "\(f.string(from: date)) \(clock(date))"
+    }
+
+    /// Rough time since something happened, for a footer: "12s ago", "4m ago".
+    /// A future timestamp (clock skew between the daemon and the app) reads as
+    /// "just now" rather than as a negative age.
+    public static func ago(_ date: Date, now: Date = Date()) -> String {
+        let seconds = Int(now.timeIntervalSince(date))
+        if seconds < 5 { return "just now" }
+        if seconds < 60 { return "\(seconds)s ago" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m ago" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h ago" }
+        return "\(hours / 24)d ago"
+    }
+
+    /// Dollars to the cent, for the per-subscription lines where the figures are
+    /// being compared against each other and rounding hides the difference.
+    public static func usdExact(_ amount: Double) -> String {
+        String(format: "$%.2f", amount)
+    }
+
     /// The right-aligned meter value, e.g. "74% · 1h12".
     public static func meterValue(pctLeft: Int?, resetsAt: Date?, now: Date = Date()) -> String {
         let pctPart = pctLeft.map { "\($0)%" } ?? "--%"
