@@ -139,9 +139,7 @@ struct PodView: View {
     let sub: Subscription
     let now: Date
 
-    /// The window the pod headlines. `tightest` is the daemon's own answer; the
-    /// fallbacks only matter for a subscription reporting no percentages at all.
-    private var leadWindow: Window? { sub.tightest ?? sub.sessionWindow ?? sub.windows.first }
+    private var leadWindow: Window? { sub.leadWindow }
     private var leadPct: Int? { leadWindow?.pctLeft }
     private var severity: Color { Theme.severity(pctLeft: leadPct) }
 
@@ -184,10 +182,18 @@ struct PodView: View {
                     .foregroundStyle(isLit ? severity.opacity(0.7) : Theme.muted)
             }
 
-            Text(resetCaption)
-                .font(Theme.label(9))
-                .foregroundStyle(Theme.faint)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(resetCaption)
+                    .font(Theme.label(9))
+                    .foregroundStyle(Theme.faint)
+                    .lineLimit(1)
+                if let sessionCaption {
+                    Text(sessionCaption)
+                        .font(Theme.label(9))
+                        .foregroundStyle(Theme.faint)
+                        .lineLimit(1)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(Array(sub.windows.enumerated()), id: \.offset) { _, window in
@@ -239,6 +245,15 @@ struct PodView: View {
     private var resetCaption: String {
         guard let reset = leadWindow?.resetsAt else { return "no reset reported" }
         return "resets \(Fmt.dayClock(reset, now: now))"
+    }
+
+    /// The 5-hour session clock, when the headline is some other window. Weekly
+    /// limits are usually the tightest, but the session is the one that decides
+    /// whether you can keep working in the next hour, and it recovers on a
+    /// completely different schedule.
+    private var sessionCaption: String? {
+        guard let session = sub.secondarySessionWindow, let reset = session.resetsAt else { return nil }
+        return "5h resets \(Fmt.dayClock(reset, now: now))"
     }
 }
 
