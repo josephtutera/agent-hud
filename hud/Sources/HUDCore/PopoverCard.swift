@@ -203,7 +203,7 @@ struct PodView: View {
                 }
                 if sub.activeAgents > 0 {
                     HStack(spacing: 5) {
-                        Circle().fill(Theme.agentColor(1)).frame(width: 5, height: 5)
+                        Circle().fill(Theme.agentDot).frame(width: 5, height: 5)
                         Text(sub.activeAgents == 1 ? "1 agent" : "\(sub.activeAgents) agents")
                             .font(Theme.label(10))
                             .foregroundStyle(Theme.muted)

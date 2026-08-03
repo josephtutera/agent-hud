@@ -7,6 +7,7 @@ import HUDCore
 //   agenthud-hud --render-preview-light out.png    -> render the card in light mode
 //   agenthud-hud --render-preview-clear out.png    -> render the card on a day
 //                                                  when nothing is wrong
+//   agenthud-hud --render-preview-clear-light out.png -> the same, in light mode
 //   agenthud-hud --render-preview-menubar out.png  -> render the menu-bar glance and
 //                                                  its dropdown card, then exit
 // The preview modes are how reviewers (and CI) see the UI headlessly.
@@ -41,6 +42,9 @@ runRender("--render-preview-light", defaultName: "preview-light.png") { url in
 }
 runRender("--render-preview-clear", defaultName: "preview-all-clear.png") { url in
     try PreviewRenderer.renderAllClearPNG(to: url, scale: 2, colorScheme: .dark)
+}
+runRender("--render-preview-clear-light", defaultName: "preview-all-clear-light.png") { url in
+    try PreviewRenderer.renderAllClearPNG(to: url, scale: 2, colorScheme: .light)
 }
 runRender("--render-preview-menubar", defaultName: "preview-menubar.png") { url in
     try PreviewRenderer.renderMenubarPNG(to: url, scale: 2)

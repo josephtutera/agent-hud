@@ -83,19 +83,6 @@ extension Agent {
     public var isIdle: Bool { !isWaiting && !isWorking }
 }
 
-/// Assigns one distinct color per running agent, in pid order so the mapping is
-/// deterministic across polls and every visible agent gets a different hue
-/// (until the palette wraps).
-public enum AgentColors {
-    public static func assign(_ agents: [Agent]) -> [Int: Color] {
-        var map: [Int: Color] = [:]
-        for (i, agent) in agents.sorted(by: { $0.pid < $1.pid }).enumerated() {
-            map[agent.pid] = Theme.agentColor(i)
-        }
-        return map
-    }
-}
-
 extension HUDSnapshot {
     /// The subscriptions in presentation order: every Claude plan first, in the
     /// order the daemon discovered them (the default config tree leads), then
