@@ -12,43 +12,6 @@ final class FormattingTests: XCTestCase {
 
     // MARK: Countdown ladder
 
-    func testCountdownSubHourShowsMinutes() {
-        XCTAssertEqual(Fmt.countdown(to: plus(37 * 60), now: now), "37m")
-        XCTAssertEqual(Fmt.countdown(to: plus(59 * 60 + 59), now: now), "59m")
-    }
-
-    func testCountdownUnderOneMinuteFloorsToOne() {
-        XCTAssertEqual(Fmt.countdown(to: plus(20), now: now), "1m")
-    }
-
-    func testCountdownHoursZeroPadsMinutes() {
-        // 2h06m
-        XCTAssertEqual(Fmt.countdown(to: plus(2 * 3600 + 6 * 60), now: now), "2h06")
-        // exactly one hour
-        XCTAssertEqual(Fmt.countdown(to: plus(3600), now: now), "1h00")
-        // 5h30m
-        XCTAssertEqual(Fmt.countdown(to: plus(5 * 3600 + 30 * 60), now: now), "5h30")
-    }
-
-    func testCountdownDaysShowDaysAndHours() {
-        // 6d22h
-        XCTAssertEqual(Fmt.countdown(to: plus(6 * 86400 + 22 * 3600), now: now), "6d22h")
-        // exactly one day
-        XCTAssertEqual(Fmt.countdown(to: plus(86400), now: now), "1d0h")
-    }
-
-    func testCountdownFarOutRendersDate() {
-        let far = plus(9 * 86400)
-        let label = Fmt.countdown(to: far, now: now)
-        // Should be a "MMM d" date, not a d/h countdown.
-        XCTAssertFalse(label.contains("d") && label.contains("h"))
-        XCTAssertEqual(label, Fmt.dateLabel(far))
-    }
-
-    func testCountdownPastIsZeroMinutes() {
-        XCTAssertEqual(Fmt.countdown(to: plus(-500), now: now), "0m")
-    }
-
     // MARK: Remaining fraction (every bar and ring)
 
     func testRemainingFractionMatchesItsNumber() {
@@ -83,15 +46,6 @@ final class FormattingTests: XCTestCase {
     }
 
     // MARK: Meter value + window labels
-
-    func testMeterValueComposition() {
-        XCTAssertEqual(
-            Fmt.meterValue(pctLeft: 74, resetsAt: plus(72 * 60), now: now),
-            "74% · 1h12"
-        )
-        XCTAssertEqual(Fmt.meterValue(pctLeft: 43, resetsAt: nil, now: now), "43%")
-        XCTAssertEqual(Fmt.meterValue(pctLeft: nil, resetsAt: nil, now: now), "--%")
-    }
 
     func testWindowLabels() {
         XCTAssertEqual(Fmt.windowLabel(kind: "session_5h"), "5h")

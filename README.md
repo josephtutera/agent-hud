@@ -92,9 +92,14 @@ python3 -m pytest tests         # the daemon: collectors, usage, pricing, snapsh
 
 ## The menu bar
 
-One concentric ring cluster per subscription, the countdown to the soonest reset
-across all of them, and a single amber dot when the agent setup has problems
-(nothing at all when it is clean, or when the daemon could not check it).
+One concentric ring cluster per subscription, and a single amber dot when the
+agent setup has problems (nothing at all when it is clean, or when the daemon
+could not check it).
+
+Deliberately no countdown. The only one that fits in a status item is the soonest
+reset across every plan, which is a single number that does not say which plan it
+belongs to. The card, a click away, gives each plan its own reset and its own
+5-hour clock.
 
 Each ring is a fuel gauge for one window: the arc is how much is **left**, so a
 healthy plan is a full ring and a burnt one is nearly bare, and it is coloured

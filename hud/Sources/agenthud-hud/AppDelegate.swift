@@ -4,8 +4,8 @@ import SwiftUI
 import HUDCore
 
 /// Wires the HUD to one store as a plain menu-bar app. An NSStatusItem hosts the
-/// glance (a severity-colored quota ring cluster per subscription, the soonest
-/// reset, and a setup dot). Left-click opens the full card panel below it;
+/// glance (a severity-colored quota ring cluster per subscription, plus a setup
+/// dot when there is something wrong). Left-click opens the full card panel;
 /// right-click offers Quit (there's no dock icon or app menu).
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {

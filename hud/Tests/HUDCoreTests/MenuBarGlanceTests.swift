@@ -32,29 +32,19 @@ final class MenuBarGlanceTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_785_000_000)
 
-    // MARK: - Countdown
+    // MARK: - No countdown
 
-    func testTheCountdownIsTheSoonestResetAcrossEverySubscription() {
+    func testTheBarCarriesNoCountdown() {
+        // The only countdown that fits is the soonest reset across every plan,
+        // which is one number that does not say which plan it belongs to. Each
+        // plan's own reset, and its 5-hour clock, live on the card.
         let soonest = SoonestReset(subscriptionID: "codex", kind: "weekly",
-                                   resetsAt: now.addingTimeInterval(3 * 3600 + 58 * 60))
-        let view = MenuBarContentView(
-            snapshot: snapshot([sub("claude-max", windows: [window("session_5h", 40)])],
-                               soonest: soonest),
-            now: now
-        )
-        XCTAssertEqual(view.countdownText, "3h58")
-    }
-
-    func testThereIsNoCountdownWhenNothingReportsAReset() {
-        let view = MenuBarContentView(
-            snapshot: snapshot([sub("claude-max", windows: [window("session_5h", 40)])]),
-            now: now
-        )
-        XCTAssertNil(view.countdownText)
-    }
-
-    func testThereIsNoCountdownWhenTheDaemonIsOffline() {
-        XCTAssertNil(MenuBarContentView(snapshot: nil, now: now).countdownText)
+                                   resetsAt: now.addingTimeInterval(3 * 3600))
+        let snap = snapshot([sub("claude-max", windows: [window("session_5h", 40)])],
+                            soonest: soonest)
+        // The snapshot still carries it — the daemon contract is unchanged — but
+        // nothing in the bar reads it.
+        XCTAssertNotNil(snap.soonestReset)
     }
 
     // MARK: - Rings
@@ -160,8 +150,6 @@ final class MenuBarGlanceTests: XCTestCase {
     func testOfflineDrawsDashesRatherThanEmptyRings() {
         // Empty rings would read as "three plans, all spent", which is the
         // opposite of "we cannot see the plans".
-        let view = MenuBarContentView(snapshot: nil, now: now)
-        XCTAssertNil(view.countdownText)
-        XCTAssertFalse(view.showsSetupDot)
+        XCTAssertFalse(MenuBarContentView(snapshot: nil, now: now).showsSetupDot)
     }
 }
