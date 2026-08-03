@@ -19,7 +19,7 @@ import os
 import re
 import sys
 import threading
-from dataclasses import is_dataclass, asdict
+from dataclasses import is_dataclass, asdict, replace
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,7 +27,7 @@ from pathlib import Path
 from activity import enrich
 from agents import running_agents
 from setup_health import collect_setup
-from subscriptions import claude_profiles, subscription_index
+from subscriptions import ClaudeOrg, claude_profiles, slug, subscription_index
 from usage import collect_usage
 
 # Live activity is cheap (file reads + one ps); usage hits a rate-limited API and
@@ -88,6 +88,46 @@ def _claude_identity(usage, index) -> tuple[str, str, list[str]]:
     if sub is None:
         return "claude", f"Claude {usage.plan}".strip() if usage.plan else "Claude", []
     return sub.id, sub.label, sub.trees
+
+
+def _reconciled(profiles, usages):
+    """The profiles, with any organization claim the tree's own credential
+    contradicts replaced by one derived from that credential.
+
+    A tree's organization comes from the account metadata Claude Code keeps
+    beside it, and that file is rewritten as sessions come and go: a tree that
+    spent a session on a Team org goes on naming the Team org afterwards, even
+    though the token it holds is a personal Max one again. The token is the
+    harder fact, because it is what the reading was fetched with and whose
+    quota that reading describes, so when the two disagree the file is the one
+    that is out of date.
+
+    Believing the file in that moment costs a whole plan: two trees both
+    naming one organization collapse into a single subscription, and the
+    second reading is discarded as a duplicate of the first — so a plan the
+    user is actively over just stops appearing. A contradicted tree is given a
+    private organization id keyed to itself, which cannot collide with anyone
+    else's, and is named by the plan the credential reports.
+
+    Only a genuine disagreement counts. A reading with no plan (no credential
+    to read one from) is silence, not evidence, and leaves the file alone.
+    """
+    plans = {
+        u.config_dir: u.plan
+        for u in usages
+        if u.tool == "claude" and u.config_dir and u.plan
+    }
+    out = []
+    for profile in profiles:
+        plan = plans.get(str(profile.config_dir), "")
+        org = profile.org
+        if org is not None and org.plan and plan and org.plan.casefold() != plan.casefold():
+            profile = replace(profile, org=ClaudeOrg(
+                uuid=f"credential:{profile.config_dir}",
+                type=f"claude_{slug(plan)}",
+            ))
+        out.append(profile)
+    return out
 
 
 def _window_kind(provider: str, label: str) -> str:
@@ -287,7 +327,9 @@ def build_snapshot(usages, fetched_at, agents, value=None, profiles=None, setup=
     same usage reading and produces byte-identical pace rather than churning."""
     generated_at = datetime.now(timezone.utc)
     now = fetched_at or generated_at  # pace/reset math uses the reading's own timestamp
-    profiles = profiles or []
+    # A tree's own credential outranks the account metadata beside it, so the
+    # reconciliation happens before anything is grouped or attributed.
+    profiles = _reconciled(profiles or [], usages)
     index = subscription_index(profiles)
 
     subscriptions: list[dict] = []

@@ -87,6 +87,15 @@ trees on different organizations stay apart even when the same person owns both.
 `accountUuid` is deliberately not used: it is the same person on both, so keying
 on it would fold two real subscriptions into one and halve the quota reported.
 
+The organization is read from the account metadata Claude Code keeps beside each
+tree, and that file is rewritten as sessions come and go, so a tree can go on
+naming an organization it no longer spends against. The credential the tree
+actually holds settles it: when the plan on that credential contradicts the
+organization on file, the tree is reported on its own, named by the credential.
+Otherwise a tree carrying a stale claim collapses into somebody else's
+subscription and its reading is dropped as a duplicate, which takes a whole plan
+off the readout at the moment its quota is most worth seeing.
+
 | field | type | meaning |
 |---|---|---|
 | `id` | string | Stable id, derived from the organization: `claude-<plan>` (`claude-max`, `claude-team`, `claude-pro`, …). Two organizations on one plan are told apart by name (`claude-team-carepilot`) and, failing that, by a slice of the organization uuid. A tree with no readable account keeps a directory-derived id (`claude-default`, `claude-<suffix>`) so it is still reported rather than dropped. Codex is always `codex`. |
