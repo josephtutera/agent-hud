@@ -4,10 +4,9 @@ import SwiftUI
 import HUDCore
 
 /// Wires the HUD to one store as a plain menu-bar app. An NSStatusItem hosts the
-/// glance (a brand-marked quota ring cluster per subscription), rendered as a
-/// monochrome template image so macOS keeps it legible over any wallpaper.
-/// Left-click opens the full card panel below it; right-click offers Quit
-/// (there's no dock icon or app menu).
+/// glance (a severity-colored quota ring cluster per subscription, the soonest
+/// reset, and a setup dot). Left-click opens the full card panel below it;
+/// right-click offers Quit (there's no dock icon or app menu).
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = HUDStore()
@@ -15,6 +14,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: NSPanel?
     /// Redraws the glance whenever the store publishes a new snapshot.
     private var cancellables = Set<AnyCancellable>()
+    /// Redraws it when the menu bar changes appearance, which the snapshot knows
+    /// nothing about.
+    private var appearanceObserver: NSKeyValueObservation?
     /// The daemon we spawned, if we did, so we can stop it again on quit and not
     /// leave an orphan behind.
     private var daemonProcess: Process?
@@ -32,10 +34,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(togglePanel)
             // Left-click toggles the card; right-click offers Quit.
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            // The glance draws in real color, so it does not get AppKit's tint
+            // for free and has to be redrawn when the bar flips light or dark.
+            appearanceObserver = button.observe(\.effectiveAppearance) { [weak self] _, _ in
+                Task { @MainActor in self?.renderGlance() }
+            }
         }
 
-        // Re-render the template glance on every poll. Published fires the
-        // current value on subscribe, so this also draws the initial state.
+        // Re-render on every poll. Published fires the current value on
+        // subscribe, so this also draws the initial state.
         renderGlance()
         store.$snapshot
             .receive(on: RunLoop.main)
@@ -43,18 +50,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
     }
 
-    /// Rasterize the menu-bar glance to a template NSImage. Drawing it black and
-    /// marking it a template hands the tint to AppKit, which colors it for the
-    /// menu bar (white on a dark bar) and guarantees contrast over any wallpaper;
-    /// only the alpha — mark solid, ring track faint, fill solid — carries through.
+    /// Rasterize the glance to a plain (non-template) NSImage.
+    ///
+    /// A template image would be the conventional choice, and it is what this
+    /// used to be: AppKit throws the pixels away, keeps the alpha, and tints the
+    /// result for guaranteed contrast over any wallpaper. But the whole point of
+    /// the rings is that severity is a color, and a template would flatten
+    /// green, amber and red into one shade — leaving a ring that says how much
+    /// is spent but not whether that is fine.
+    ///
+    /// So it draws in color, and everything that is not severity is resolved
+    /// against the menu bar's own appearance instead, which buys back the
+    /// legibility the template was giving us: near-white ink on a dark bar,
+    /// near-black on a light one.
     private func renderGlance() {
         guard let button = statusItem?.button else { return }
-        let glance = MenuBarContentView(snapshot: store.snapshot, now: store.now, tint: .black)
-        let renderer = ImageRenderer(content: glance)
-        renderer.scale = button.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        renderer.isOpaque = false
-        guard let image = renderer.nsImage else { return }
-        image.isTemplate = true
+        let appearance = button.effectiveAppearance
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+
+        let glance = MenuBarContentView(
+            snapshot: store.snapshot,
+            now: store.now,
+            ink: isDark ? .white : .black
+        )
+        .environment(\.colorScheme, isDark ? .dark : .light)
+
+        var image: NSImage?
+        // Resolve the dynamic Theme colors (severity, amber) against the bar's
+        // appearance rather than the app's, which for an accessory app with no
+        // windows is not reliably the same thing.
+        appearance.performAsCurrentDrawingAppearance {
+            let renderer = ImageRenderer(content: glance)
+            renderer.scale = button.window?.backingScaleFactor
+                ?? NSScreen.main?.backingScaleFactor ?? 2
+            renderer.isOpaque = false
+            image = renderer.nsImage
+        }
+        guard let image else { return }
+        image.isTemplate = false
         button.image = image
         button.imagePosition = .imageOnly
     }

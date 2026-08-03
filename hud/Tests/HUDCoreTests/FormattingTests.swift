@@ -49,25 +49,10 @@ final class FormattingTests: XCTestCase {
         XCTAssertEqual(Fmt.countdown(to: plus(-500), now: now), "0m")
     }
 
-    // MARK: Consumed fraction math
-
-    func testConsumedFraction() {
-        XCTAssertEqual(Fmt.consumed(pctLeft: 100), 0.0, accuracy: 0.0001)
-        XCTAssertEqual(Fmt.consumed(pctLeft: 74), 0.26, accuracy: 0.0001)
-        XCTAssertEqual(Fmt.consumed(pctLeft: 25), 0.75, accuracy: 0.0001)
-        XCTAssertEqual(Fmt.consumed(pctLeft: 0), 1.0, accuracy: 0.0001)
-    }
-
-    func testConsumedFractionClampsAndHandlesNull() {
-        XCTAssertEqual(Fmt.consumed(pctLeft: nil), 0.0, accuracy: 0.0001)
-        XCTAssertEqual(Fmt.consumed(pctLeft: 150), 0.0, accuracy: 0.0001)
-        XCTAssertEqual(Fmt.consumed(pctLeft: -20), 1.0, accuracy: 0.0001)
-    }
-
-    // MARK: Remaining fraction (glance fuel bar)
+    // MARK: Remaining fraction (every bar and ring)
 
     func testRemainingFractionMatchesItsNumber() {
-        // The glance bar fills by what's LEFT, the inverse of `consumed`.
+        // Everything fills by what's LEFT: a full ring or bar means plenty.
         XCTAssertEqual(Fmt.remaining(pctLeft: 100), 1.0, accuracy: 0.0001)
         XCTAssertEqual(Fmt.remaining(pctLeft: 74), 0.74, accuracy: 0.0001)
         XCTAssertEqual(Fmt.remaining(pctLeft: 18), 0.18, accuracy: 0.0001)

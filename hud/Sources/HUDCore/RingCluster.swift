@@ -1,30 +1,39 @@
 import SwiftUI
 
-/// One concentric ring cluster, outermost ring first. Each ring fills by the
-/// consumed fraction of its window, colored by severity, drawn round-capped
-/// over a hairline track. A fully spent limit therefore renders as a complete
-/// solid ring. Now used only by the popover's offline state (three dim rings);
-/// the menu-bar glance shows percentages and a fuel bar, not rings.
+/// One concentric ring cluster, outermost ring first.
+///
+/// Each ring reads as a fuel gauge: the arc is how much of that window is
+/// *left*, so a healthy plan is a full ring and a burnt one is nearly bare. That
+/// matches the fuel bars in the pods and on the meter rows, which fill the same
+/// way — the alternative, filling by what you have spent, means the same
+/// quantity runs in opposite directions in two places on one screen.
+///
+/// The catch with a fuel gauge is that empty renders as nothing, which is
+/// exactly the state that most needs to be visible. So the track carries the
+/// severity color too, at low opacity: a spent limit is a complete red circle
+/// with no arc on it, rather than an absence.
+///
+/// Used by the menu-bar glance (one cluster per subscription) and by the
+/// popover's offline state (three dim, empty clusters).
 public struct RingCluster: View {
     public let rings: [Window?]
     public var diameter: CGFloat = 18
     public var strokeWidth: CGFloat = 2
-    /// When set, the cluster renders monochrome in this single color (faint
-    /// track, solid fill) instead of the severity palette — for the menu-bar
-    /// glance, which AppKit re-tints for contrast. Fill level still shows how
-    /// spent a limit is; the color-coded severity lives in the full card.
-    public var tint: Color?
+    /// The unfilled part of each ring. Defaults to the card's hairline; the menu
+    /// bar passes a wash of its own ink instead, because a hairline picked for
+    /// the card is invisible against the menu-bar strip.
+    public var track: Color?
 
-    public init(rings: [Window?], diameter: CGFloat = 18, strokeWidth: CGFloat = 2, tint: Color? = nil) {
+    public init(rings: [Window?], diameter: CGFloat = 18, strokeWidth: CGFloat = 2, track: Color? = nil) {
         self.rings = rings
         self.diameter = diameter
         self.strokeWidth = strokeWidth
-        self.tint = tint
+        self.track = track
     }
 
-    /// The original two-ring form used by the menubar mini and offline states.
-    public init(session: Window?, weekly: Window?, diameter: CGFloat = 18, strokeWidth: CGFloat = 2, tint: Color? = nil) {
-        self.init(rings: [session, weekly], diameter: diameter, strokeWidth: strokeWidth, tint: tint)
+    /// The two-ring form used by the offline state.
+    public init(session: Window?, weekly: Window?, diameter: CGFloat = 18, strokeWidth: CGFloat = 2, track: Color? = nil) {
+        self.init(rings: [session, weekly], diameter: diameter, strokeWidth: strokeWidth, track: track)
     }
 
     public var body: some View {
@@ -36,25 +45,43 @@ public struct RingCluster: View {
         .frame(width: diameter, height: diameter)
     }
 
-    /// Ring spacing from the approved artboards: at stroke 2 the radii step by
-    /// 3pt per ring (26pt cluster: r 11/8/5; 18pt cluster: r 7/4), i.e. one
-    /// stroke off the frame edge, then a stroke-and-a-point per level inward.
+    /// Ring spacing from the approved artboards: one stroke off the frame edge,
+    /// then a stroke-and-a-point per level inward. At the menu bar's 20pt/1.6pt
+    /// that puts three rings at radii 8.4 / 5.8 / 3.2, which is the artboard's
+    /// proportions at the size a status item actually has.
     private func inset(at index: Int) -> CGFloat {
         strokeWidth + CGFloat(index) * (strokeWidth + 1)
     }
 
+    /// The unfilled part of a ring.
+    ///
+    /// Normally a wash of the ring's own severity, so a half-spent limit reads
+    /// as one coloured ring rather than an arc floating on a grey circle. When
+    /// the limit is fully spent there is no arc at all, so the track takes the
+    /// severity at full strength instead: that is the state most worth seeing,
+    /// and a 32% red is a solid dark ring on a dark bar but pale pink on a light
+    /// one, which is the appearance that needs it most.
+    ///
+    /// A window with no reading has no severity to show, so it falls back to the
+    /// neutral track the caller passed.
+    func trackColor(pctLeft: Int?, fraction: Double, severity: Color) -> Color {
+        guard pctLeft != nil else { return track ?? Theme.hairline }
+        return fraction > 0 ? severity.opacity(0.32) : severity
+    }
+
     @ViewBuilder
     private func ring(for window: Window?, inset: CGFloat) -> some View {
-        let fraction = Fmt.consumed(pctLeft: window?.pctLeft)
-        let trackColor = tint.map { $0.opacity(0.32) } ?? Theme.hairline
-        let fillColor = tint ?? Theme.severity(pctLeft: window?.pctLeft)
+        let pctLeft = window?.pctLeft
+        let fraction = Fmt.remaining(pctLeft: pctLeft)
+        let severity = Theme.severity(pctLeft: pctLeft)
+        let trackColor = trackColor(pctLeft: pctLeft, fraction: fraction, severity: severity)
         ZStack {
             Circle()
                 .stroke(trackColor, lineWidth: strokeWidth)
             Circle()
                 .trim(from: 0, to: max(0, min(1, fraction)))
                 .stroke(
-                    fillColor,
+                    severity,
                     style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))

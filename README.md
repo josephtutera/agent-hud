@@ -60,6 +60,7 @@ swift run agenthud-hud --render-preview-light preview-light.png            # pro
 swift run agenthud-hud --render-preview-clear preview-all-clear.png        # all clear, dark
 swift run agenthud-hud --render-preview-clear-light preview-all-clear-light.png
 swift run agenthud-hud --render-preview-menubar preview-menubar.png
+swift run agenthud-hud --render-preview-menubar-light preview-menubar-light.png
 ```
 
 The card follows the system appearance: every semantic colour is a
@@ -88,6 +89,27 @@ python3 -m pytest tests         # the daemon: collectors, usage, pricing, snapsh
 | `docs/hud-schema.md` | the frozen snapshot contract the Swift app decodes |
 | `hud/Sources/HUDCore` | contract structs, theme, formatting, and every SwiftUI view |
 | `hud/Sources/agenthud-hud` | the AppKit shell: status item, panel, daemon launcher |
+
+## The menu bar
+
+One concentric ring cluster per subscription, the countdown to the soonest reset
+across all of them, and a single amber dot when the agent setup has problems
+(nothing at all when it is clean, or when the daemon could not check it).
+
+Each ring is a fuel gauge for one window: the arc is how much is **left**, so a
+healthy plan is a full ring and a burnt one is nearly bare, and it is coloured
+green, amber or red by severity. A plan with three limits draws three rings; a
+plan with one draws one. A fully spent limit has no arc to carry its colour, so
+its track goes solid red instead: empty is the state most worth seeing, and it
+must not render as an absence.
+
+That colour is why the status item is **not** a template image, which is the
+conventional choice. A template throws its pixels away and takes AppKit's tint,
+guaranteeing contrast over any wallpaper, but it would also flatten green, amber
+and red into one shade and leave a ring that says how full it is without saying
+whether that is fine. So the glance draws in real colour and resolves everything
+that is not severity against the menu bar's own appearance instead, re-rendering
+whenever that appearance changes.
 
 ## Setup health
 

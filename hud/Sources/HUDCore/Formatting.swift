@@ -4,19 +4,14 @@ import Foundation
 // `now`, so the unit tests can pin the clock and the views stay dumb.
 public enum Fmt {
 
-    /// Consumed fraction of a limit, in 0...1, from percent remaining.
-    /// A null reading is treated as nothing consumed (empty ring/bar).
-    public static func consumed(pctLeft: Int?) -> Double {
-        guard let pct = pctLeft else { return 0 }
-        let clamped = min(100, max(0, pct))
-        return Double(100 - clamped) / 100.0
-    }
-
-    /// Remaining fraction of a limit, in 0...1, from percent remaining. This is
-    /// the fill for the menu-bar glance's micro fuel-bar, which reads as a fuel
-    /// gauge (a short bar means little left), so it matches its own number
-    /// rather than the popover meters, which fill by `consumed`. A null reading
-    /// is treated as empty.
+    /// Remaining fraction of a limit, in 0...1, from percent remaining.
+    ///
+    /// The one fill direction in this app: every bar and every ring reads as a
+    /// fuel gauge, so a short bar or a bare ring always means little left. There
+    /// used to be a `consumed` counterpart for the rings, which meant the same
+    /// quantity ran in opposite directions in two places on one screen.
+    ///
+    /// A null reading is treated as empty.
     public static func remaining(pctLeft: Int?) -> Double {
         guard let pct = pctLeft else { return 0 }
         return Double(min(100, max(0, pct))) / 100.0
