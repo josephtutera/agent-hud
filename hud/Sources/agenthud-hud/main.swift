@@ -10,6 +10,7 @@ import HUDCore
 //   agenthud-hud --render-preview-clear-light out.png -> the same, in light mode
 //   agenthud-hud --render-preview-menubar out.png  -> render the menu-bar glance and
 //                                                  its dropdown card, then exit
+//   agenthud-hud --render-preview-menubar-light out.png -> the same, light bar
 // The preview modes are how reviewers (and CI) see the UI headlessly.
 
 let args = CommandLine.arguments
@@ -47,7 +48,10 @@ runRender("--render-preview-clear-light", defaultName: "preview-all-clear-light.
     try PreviewRenderer.renderAllClearPNG(to: url, scale: 2, colorScheme: .light)
 }
 runRender("--render-preview-menubar", defaultName: "preview-menubar.png") { url in
-    try PreviewRenderer.renderMenubarPNG(to: url, scale: 2)
+    try PreviewRenderer.renderMenubarPNG(to: url, scale: 2, colorScheme: .dark)
+}
+runRender("--render-preview-menubar-light", defaultName: "preview-menubar-light.png") { url in
+    try PreviewRenderer.renderMenubarPNG(to: url, scale: 2, colorScheme: .light)
 }
 
 MainActor.assumeIsolated {

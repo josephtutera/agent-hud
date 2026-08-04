@@ -189,7 +189,10 @@ def test_subscriptions_are_named_by_organization_not_directory(tmp_path: Path):
                       org_name="CarePilot", org_type="claude_team")
     profiles = claude_profiles(home=tmp_path)
 
-    usages = [_claude_usage(config_dir=str(p.config_dir)) for p in profiles]
+    usages = [
+        _claude_usage(config_dir=str(profiles[0].config_dir), plan="Max"),
+        _claude_usage(config_dir=str(profiles[1].config_dir), plan="Team"),
+    ]
     snap = build_snapshot(usages, _now(), [], profiles=profiles)
     subs = {s["id"]: s["label"] for s in snap["subscriptions"]}
     assert subs == {"claude-max": "Claude Max", "claude-team": "Claude Team"}
@@ -208,6 +211,48 @@ def test_two_trees_on_one_org_are_one_subscription(tmp_path: Path):
     snap = build_snapshot(usages, _now(), [], profiles=profiles)
     assert [s["id"] for s in snap["subscriptions"]] == ["claude-team"]
     assert snap["subscriptions"][0]["trees"] == ["~/.claude", "~/.claude-work"]
+
+
+def test_a_tree_is_believed_over_a_stale_org_claim(tmp_path: Path):
+    """The real failure this guards: the default tree's account metadata still
+    named the Team org after a Team session, while the token it holds — and the
+    reading fetched with it — was the personal Max one. Believing the file
+    folded both trees into one subscription and threw the Max reading away as a
+    duplicate, so a plan the user was actively over simply vanished from the
+    card. The credential decides, and both plans stay on screen."""
+    write_claude_tree(tmp_path, ".claude", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    write_claude_tree(tmp_path, ".claude-team", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    profiles = claude_profiles(home=tmp_path)
+
+    spent = [UsageWindow("5h", 100.0, _now() + timedelta(hours=3))]
+    usages = [
+        _claude_usage(config_dir=str(profiles[0].config_dir), plan="Max", windows=spent),
+        _claude_usage(config_dir=str(profiles[1].config_dir), plan="Team"),
+    ]
+    snap = build_snapshot(usages, _now(), [], profiles=profiles)
+    subs = {s["id"]: s for s in snap["subscriptions"]}
+    assert set(subs) == {"claude-max", "claude-team"}
+    assert subs["claude-max"]["label"] == "Claude Max"
+    assert subs["claude-max"]["trees"] == ["~/.claude"]
+    assert subs["claude-max"]["windows"][0]["pct_left"] == 0  # the spent plan is still shown
+    assert subs["claude-team"]["trees"] == ["~/.claude-team"]
+
+
+def test_a_reading_with_no_plan_leaves_the_org_claim_alone(tmp_path: Path):
+    """A reading that could not name its plan (no credential to read it from) is
+    no evidence against the config tree, so the trees still collapse. Splitting
+    on silence would report one quota twice."""
+    write_claude_tree(tmp_path, ".claude", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    write_claude_tree(tmp_path, ".claude-work", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    profiles = claude_profiles(home=tmp_path)
+
+    usages = [_claude_usage(config_dir=str(p.config_dir), plan="") for p in profiles]
+    snap = build_snapshot(usages, _now(), [], profiles=profiles)
+    assert [s["id"] for s in snap["subscriptions"]] == ["claude-team"]
 
 
 def test_a_fresh_tree_beats_a_stale_one_for_the_same_subscription(tmp_path: Path):
@@ -501,3 +546,39 @@ def test_a_failed_setup_poll_clears_the_block_rather_than_keeping_the_last_good_
     assert daemon.snapshot()["setup"] == good
     daemon.poll_setup_once()
     assert daemon.snapshot()["setup"] is None
+
+
+# ---------------------------------------------------------------- freshness
+
+
+def test_a_reading_carries_when_it_was_true():
+    """Not when the snapshot was built. Claude is re-read every few minutes, but
+    Codex is only as fresh as your last Codex turn."""
+    read_at = _now() - timedelta(days=3)
+    usage = _codex_usage(read_at=read_at)
+    sub = build_snapshot([usage], _now(), [])["subscriptions"][0]
+    assert sub["read_at"] == read_at.isoformat()
+
+
+def test_a_reading_with_no_timestamp_says_so_rather_than_guessing():
+    sub = build_snapshot([_claude_usage()], _now(), [])["subscriptions"][0]
+    assert sub["read_at"] is None
+
+
+def test_the_fresher_of_two_trees_on_one_org_wins(tmp_path: Path):
+    """Both readings are equally trustworthy, so the tiebreak is recency: the
+    other tree may have been polled minutes ago."""
+    write_claude_tree(tmp_path, ".claude", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    write_claude_tree(tmp_path, ".claude-work", org_uuid=TEAM_ORG,
+                      org_name="CarePilot", org_type="claude_team")
+    profiles = claude_profiles(home=tmp_path)
+    older, newer = _now() - timedelta(minutes=30), _now()
+
+    usages = [
+        _claude_usage(config_dir=str(profiles[0].config_dir), read_at=older),
+        _claude_usage(config_dir=str(profiles[1].config_dir), read_at=newer),
+    ]
+    snap = build_snapshot(usages, _now(), [], profiles=profiles)
+    assert len(snap["subscriptions"]) == 1
+    assert snap["subscriptions"][0]["read_at"] == newer.isoformat()

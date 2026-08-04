@@ -189,7 +189,11 @@ def _config_dirs(home: Path) -> list[tuple[Path, bool]]:
     return dirs or [(default, True)]
 
 
-def _slug(text: str) -> str:
+def slug(text: str) -> str:
+    """A word turned into the id form used throughout: lowercase, hyphenated.
+    Public because a subscription id is sometimes built from what a credential
+    says rather than from what a config tree says, and both spellings have to
+    land on the same string."""
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
@@ -202,14 +206,14 @@ def _base_id(profile: ClaudeProfile) -> str:
     org = profile.org
     if org is not None:
         if org.plan:
-            return f"claude-{_slug(org.plan)}"
+            return f"claude-{slug(org.plan)}"
         if org.name and not _is_email(org.name):
-            return f"claude-{_slug(org.name)}"
+            return f"claude-{slug(org.name)}"
         return "claude"
     name = profile.config_dir.name
     if name.startswith(".claude-"):
-        return f"claude-{_slug(name[len('.claude-'):])}"
-    return "claude-default" if profile.default else f"claude-{_slug(name)}"
+        return f"claude-{slug(name[len('.claude-'):])}"
+    return "claude-default" if profile.default else f"claude-{slug(name)}"
 
 
 def _base_label(profile: ClaudeProfile) -> str:
@@ -261,11 +265,11 @@ def _disambiguate(base: str, label: str, profile: ClaudeProfile) -> tuple[str, s
     thing guaranteed to differ."""
     org = profile.org
     if org is not None and org.name and not _is_email(org.name):
-        return f"{base}-{_slug(org.name)}", f"{label} ({org.name})"
+        return f"{base}-{slug(org.name)}", f"{label} ({org.name})"
     if org is not None:
         short = org.uuid[:8]
         return f"{base}-{short}", f"{label} ({short})"
-    return f"{base}-{_slug(profile.config_dir.name)}", f"{label} ({profile.config_dir.name})"
+    return f"{base}-{slug(profile.config_dir.name)}", f"{label} ({profile.config_dir.name})"
 
 
 def subscription_index(profiles: list[ClaudeProfile]) -> dict[str, ClaudeSubscription]:

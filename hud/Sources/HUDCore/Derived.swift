@@ -31,12 +31,16 @@ extension Subscription {
         windows.first { $0.isFable }
     }
 
-    /// The notch-face cluster rings, outer to inner: 5h session, weekly, then
-    /// Fable when the subscription reports one (Codex clusters get two rings).
-    public var notchRings: [Window?] {
-        var rings: [Window?] = [sessionWindow, weekly7dWindow]
-        if let fable = fableWindow { rings.append(fable) }
-        return rings
+    /// The menu-bar cluster's rings, outer to inner: 5h session, weekly, then
+    /// Fable. Only windows the subscription actually reports, so a plan with one
+    /// limit draws one ring rather than an empty outer ring around it — Codex
+    /// has no session window, and drawing a hollow one would read as a limit it
+    /// had spent nothing of.
+    public var glanceRings: [Window?] {
+        // `filter`, not `compactMap`: with an `[Window?]` result type Swift
+        // resolves `compactMap { $0 }` as promoting each element to `Window??`
+        // and keeps every nil, which is exactly the hollow ring this avoids.
+        [sessionWindow, weekly7dWindow, fableWindow].filter { $0 != nil }
     }
 
     /// The single window the menu-bar glance headlines: the 5h session, i.e.
@@ -46,6 +50,23 @@ extension Subscription {
     /// popover a click away, where every window is shown.
     public var glanceWindow: Window? {
         sessionWindow ?? tightest ?? windows.first
+    }
+
+    /// How old a reading is allowed to be before the pod says so. Claude is
+    /// re-read every three minutes, so anything past this means something is
+    /// wrong — a cooldown, a dead daemon, a machine just back from sleep — or,
+    /// for Codex, simply that you have not run it lately.
+    public static let freshnessLimit: TimeInterval = 10 * 60
+
+    /// The reading's age when it is old enough to be worth saying, else nil.
+    ///
+    /// Codex has no API to ask: its numbers come out of a rollout file written as
+    /// a side effect of a turn, so they are exactly as old as your last Codex
+    /// turn. A weekly window that has since reset makes an old percentage wrong,
+    /// not merely late, which is why this is surfaced rather than smoothed over.
+    public func agedReading(now: Date) -> Date? {
+        guard let readAt, now.timeIntervalSince(readAt) > Self.freshnessLimit else { return nil }
+        return readAt
     }
 
     public var isIdle: Bool { activeAgents <= 0 }

@@ -69,33 +69,36 @@ public enum PreviewRenderer {
         snapshot: HUDSnapshot = .sample,
         now: Date = HUDSnapshot.previewNow,
         to url: URL,
-        scale: CGFloat = 2
+        scale: CGFloat = 2,
+        colorScheme: ColorScheme = .dark
     ) throws -> URL {
-        // A dark menu-bar-over-desktop demo, so pin the card to dark regardless
-        // of the host machine's system appearance.
+        // Pin the appearance rather than inheriting the host machine's, so the
+        // artifact is the same wherever it is generated.
+        let isDark = colorScheme == .dark
         #if canImport(AppKit)
         let previousAppearance = NSApplication.shared.appearance
-        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+        NSApplication.shared.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
         defer { NSApplication.shared.appearance = previousAppearance }
         #endif
 
         let content = VStack(alignment: .trailing, spacing: 24) {
-            // The glance on a dark menu-bar strip, right-aligned like the real
-            // status area.
+            // The glance on a menu-bar strip, right-aligned like the real status
+            // area. `ink` is what the app resolves from the bar's appearance:
+            // near-white on a dark bar, near-black on a light one. The severity
+            // colours do not move, which is the point of not being a template.
             HStack {
                 Spacer()
-                // White mimics AppKit's template tint on a dark menu bar.
-                MenuBarContentView(snapshot: snapshot, now: now, tint: .white)
+                MenuBarContentView(snapshot: snapshot, now: now, ink: isDark ? .white : .black)
             }
             .padding(.horizontal, 12)
             .frame(height: 28)
-            .background(Color(hex: 0x26272C)) // --color-menubar from the artboards
+            .background(Color(hex: isDark ? 0x26272C : 0xF2F2F4))
 
             PopoverCard(snapshot: snapshot, now: now)
         }
-        .environment(\.colorScheme, .dark)
+        .environment(\.colorScheme, colorScheme)
         .padding(40)
-        .background(Color(hex: 0x1C1D21)) // --color-desktop from the artboards
+        .background(Color(hex: isDark ? 0x1C1D21 : 0xE9EAEE))
 
         return try write(content, to: url, scale: scale, opaque: true)
     }

@@ -6,8 +6,9 @@ every meaningful change and served over a loopback HTTP API. This document is th
 contract for the Swift HUD app: the field names below are frozen and will not be
 renamed.
 
-**v2** added the `setup` block. Everything from v1 is unchanged, and `setup` is
-optional on the reading side, so a v1 snapshot still decodes.
+**v2** added the `setup` block, and later `subscriptions[].read_at` and
+`subscriptions[].trees`. Everything from v1 is unchanged, and every field added
+since is optional on the reading side, so an older snapshot still decodes.
 
 ## Serving it
 
@@ -69,6 +70,7 @@ Run it with `agenthud serve` (or `agenthud --serve`), optionally with `--host` a
   "provider": "claude",
   "label": "Claude Team",
   "trees": ["~/.claude-team"],
+  "read_at": "2026-08-02T21:38:04+00:00",
   "windows": [ ... ],
   "tightest": { "kind": "session_5h", "pct_left": 62, "resets_at": "..." } | null,
   "stale": null,
@@ -85,12 +87,22 @@ trees on different organizations stay apart even when the same person owns both.
 `accountUuid` is deliberately not used: it is the same person on both, so keying
 on it would fold two real subscriptions into one and halve the quota reported.
 
+The organization is read from the account metadata Claude Code keeps beside each
+tree, and that file is rewritten as sessions come and go, so a tree can go on
+naming an organization it no longer spends against. The credential the tree
+actually holds settles it: when the plan on that credential contradicts the
+organization on file, the tree is reported on its own, named by the credential.
+Otherwise a tree carrying a stale claim collapses into somebody else's
+subscription and its reading is dropped as a duplicate, which takes a whole plan
+off the readout at the moment its quota is most worth seeing.
+
 | field | type | meaning |
 |---|---|---|
 | `id` | string | Stable id, derived from the organization: `claude-<plan>` (`claude-max`, `claude-team`, `claude-pro`, …). Two organizations on one plan are told apart by name (`claude-team-carepilot`) and, failing that, by a slice of the organization uuid. A tree with no readable account keeps a directory-derived id (`claude-default`, `claude-<suffix>`) so it is still reported rather than dropped. Codex is always `codex`. |
 | `provider` | `"claude"` \| `"codex"` | Which vendor this subscription is. |
 | `label` | string | Display name, e.g. `Claude Max`, `Claude Team`, `Claude Team (CarePilot)`, `Codex Pro`. |
 | `trees` | array of strings | The config trees signed into this subscription, e.g. `["~/.claude", "~/.claude-work"]`. More than one means they were collapsed into this entry. Empty for Codex, and for a reading the daemon could not attribute to a tree. |
+| `read_at` | ISO8601 string, or null | When these numbers were last **true** — not when the snapshot was built. Claude is re-read on the usage poll, so this tracks it closely. Codex has no API to ask: its figures come out of a rollout file written as a side effect of a turn. The daemon uses the newest rate-limit event timestamp, falling back to the file mtime only for older event records that did not carry a timestamp, so another active session cannot overwrite a newer reading merely by writing later. A reader must treat an old `read_at` as a reason to say so, because a weekly window that has since reset makes an old percentage wrong rather than merely late. `null` when the reading carries no timestamp (an older daemon, or a subscription with no successful read yet). |
 | `windows` | array | The usage windows this subscription reports (see below). |
 | `tightest` | object or null | The window with the least headroom (lowest `pct_left`), copied out for quick access. `null` when no window has a percentage. Carries `kind`, `pct_left`, `resets_at`. |
 | `stale` | string or null | `null` when the reading is fresh. A human reason like `"rate limited, retry 4m"` when the values are last-good rather than current (rate limit cooldown or a fetch failure). Stale data is never presented as fresh: the windows keep their last-good numbers and this field says why. |

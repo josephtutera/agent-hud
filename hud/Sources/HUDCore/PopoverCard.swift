@@ -29,7 +29,7 @@ public struct PopoverCard: View {
         VStack(alignment: .leading, spacing: 16) {
             if let snap = snapshot {
                 CardHeaderView(now: now)
-                GaugeClusterView(subs: orderedSubs, now: now)
+                LimitsSection(subs: orderedSubs, now: now)
                 SetupSection(setup: snap.setup)
                 if let value = snap.value {
                     ValueStripView(value: value, subs: orderedSubs, now: now)
@@ -109,152 +109,121 @@ extension SectionRule where Accessory == EmptyView {
     }
 }
 
-// MARK: - Gauge cluster
+// MARK: - Limits
 
-/// The instrument cluster: one gauge pod per subscription, equal width.
-struct GaugeClusterView: View {
+/// Every limit on every plan, one row each.
+///
+/// This used to be three side-by-side pods, each headlining the window with the
+/// least headroom. That number was the problem: which window it quoted moved
+/// with whatever happened to be tightest, so the same big figure meant the
+/// 5-hour session on one plan and the Fable weekly on another, and the reset
+/// line under it moved with it. Naming the windows helped and did not fix it —
+/// the shape of a pod still changed depending on its own data.
+///
+/// So there is no headline any more. A row is one window on one plan: what it
+/// is, how much is left, and when it comes back. Nothing shifts, and a plan with
+/// three limits is three rows rather than one number plus footnotes.
+struct LimitsSection: View {
     let subs: [Subscription]
     let now: Date
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            ForEach(subs) { sub in
-                PodView(sub: sub, now: now)
+        VStack(alignment: .leading, spacing: 12) {
+            SectionRule(title: "LIMITS")
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(subs) { sub in
+                    PlanLimits(sub: sub, now: now)
+                }
             }
         }
     }
 }
 
-/// One plan's pod: mark + short name, the big number for the window with the
-/// least headroom, when that window resets, then a meter row for every window
-/// the subscription reports. Every window is shown because a Claude plan has
-/// three and a Codex plan has one, and a card that only draws the 5-hour window
-/// silently hides whichever limit you are actually about to hit. The tightest
-/// row is the one drawn at full contrast, since it is the number the big figure
-/// is quoting.
-///
-/// When that window is pressured (< 25% left) the whole pod lights in its
-/// severity color, the way a dashboard warning lamp does.
-struct PodView: View {
+/// One plan: its name, then a row per window it reports.
+struct PlanLimits: View {
     let sub: Subscription
     let now: Date
-
-    /// The window the pod headlines. `tightest` is the daemon's own answer; the
-    /// fallbacks only matter for a subscription reporting no percentages at all.
-    private var leadWindow: Window? { sub.tightest ?? sub.sessionWindow ?? sub.windows.first }
-    private var leadPct: Int? { leadWindow?.pctLeft }
-    private var severity: Color { Theme.severity(pctLeft: leadPct) }
-
-    /// Lit when the lead window is amber/red (pressured), i.e. < 25% left.
-    private var isLit: Bool {
-        guard let p = leadPct else { return false }
-        return p < 25
-    }
-
-    private var shortName: String {
-        if sub.label.hasPrefix("Claude ") {
-            return String(sub.label.dropFirst("Claude ".count))
-        }
-        return sub.label
-    }
 
     private var dotColor: Color {
         sub.provider == "codex" ? Theme.codexGreen : Theme.claudeCoral
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 7) {
                 Circle().fill(dotColor).frame(width: 7, height: 7)
                 Text(sub.label.uppercased())
-                    .font(Theme.label(9, weight: .semibold))
+                    .font(Theme.label(10, weight: .semibold))
                     .tracking(1.0)
                     .foregroundStyle(Theme.muted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 8)
+                trailingNote
             }
-
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(Fmt.glancePercent(pctLeft: leadPct))
-                    .font(Theme.mono(34, weight: .bold))
-                    .foregroundStyle(isLit ? severity : Theme.text)
-                    .monospacedDigit()
-                Text("%")
-                    .font(Theme.mono(12))
-                    .foregroundStyle(isLit ? severity.opacity(0.7) : Theme.muted)
-            }
-
-            Text(resetCaption)
-                .font(Theme.label(9))
-                .foregroundStyle(Theme.faint)
-                .lineLimit(1)
-
-            VStack(alignment: .leading, spacing: 5) {
+            if sub.windows.isEmpty {
+                Text(sub.stale ?? "no limits reported")
+                    .font(Theme.label(11))
+                    .foregroundStyle(Theme.amber)
+                    .padding(.leading, 14)
+            } else {
                 ForEach(Array(sub.windows.enumerated()), id: \.offset) { _, window in
-                    PodMeterRow(window: window, isLead: window.kind == leadWindow?.kind)
+                    LimitRow(window: window, now: now)
                 }
                 if sub.sessionWindow == nil {
                     // Codex reports only a weekly limit. Saying so beats leaving
-                    // a reader to wonder where the session row went.
+                    // a reader to wonder where the 5h row went.
                     Text("no session limit")
-                        .font(Theme.label(9))
+                        .font(Theme.label(10))
                         .foregroundStyle(Theme.faint)
-                        .padding(.top, 1)
-                }
-                if sub.activeAgents > 0 {
-                    HStack(spacing: 5) {
-                        Circle().fill(Theme.agentDot).frame(width: 5, height: 5)
-                        Text(sub.activeAgents == 1 ? "1 agent" : "\(sub.activeAgents) agents")
-                            .font(Theme.label(10))
-                            .foregroundStyle(Theme.muted)
-                    }
-                    .padding(.top, 3)
-                }
-                if let stale = sub.stale {
-                    Text(stale)
-                        .font(Theme.label(9))
-                        .foregroundStyle(Theme.amber)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 3)
+                        .padding(.leading, 14)
                 }
             }
-            .padding(.top, 3)
         }
-        .padding(13)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isLit ? severity.opacity(0.10) : Theme.panel2)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(isLit ? severity.opacity(0.40) : Theme.hairline, lineWidth: 1)
-        )
     }
 
-    /// When the headline window rolls over, as a day and clock time rather than
-    /// a countdown: the countdown belongs in the menu bar, where you glance at
-    /// it; here you are deciding whether to wait, which is a question about when.
-    private var resetCaption: String {
-        guard let reset = leadWindow?.resetsAt else { return "no reset reported" }
-        return "resets \(Fmt.dayClock(reset, now: now))"
+    /// The right-hand note on the plan's own line: why its numbers are suspect,
+    /// how old they are, or how many agents are spending against it — in that
+    /// order, because a reason to distrust the row outranks a detail about it.
+    @ViewBuilder
+    private var trailingNote: some View {
+        if let stale = sub.stale, !sub.windows.isEmpty {
+            Text(stale)
+                .font(Theme.label(10))
+                .foregroundStyle(Theme.amber)
+                .lineLimit(1)
+                .fixedSize()
+        } else if let readAt = sub.agedReading(now: now) {
+            Text("as of \(Fmt.ago(readAt, now: now))")
+                .font(Theme.label(10))
+                .foregroundStyle(Theme.faint)
+                .fixedSize()
+        } else if sub.activeAgents > 0 {
+            HStack(spacing: 5) {
+                Circle().fill(Theme.agentDot).frame(width: 5, height: 5)
+                Text(sub.activeAgents == 1 ? "1 agent" : "\(sub.activeAgents) agents")
+                    .font(Theme.label(10))
+                    .foregroundStyle(Theme.muted)
+            }
+            .fixedSize()
+        }
     }
 }
 
-/// One window inside a pod: a fixed-width label, a bar filled by how much is
-/// left, and the number. The lead row draws at full contrast; the rest recede,
-/// so the pod reads as one number with its supporting detail.
-struct PodMeterRow: View {
+/// One window: what it is, a fuel bar for how much is left, the number, and when
+/// it comes back. Every row has the same shape whichever plan it belongs to.
+struct LimitRow: View {
     let window: Window
-    let isLead: Bool
+    let now: Date
+
+    /// Amber and red pull the number forward; a healthy row leaves it plain, so
+    /// the colour on the card means something rather than being everywhere.
+    private var isPressured: Bool { (window.pctLeft ?? 100) < 25 }
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 9) {
             Text(Fmt.windowName(kind: window.kind))
-                .font(Theme.label(10))
-                .foregroundStyle(isLead ? Theme.text : Theme.faint)
-                .frame(width: 40, alignment: .leading)
+                .font(Theme.label(11))
+                .foregroundStyle(Theme.muted)
+                .frame(width: 44, alignment: .leading)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Theme.hairline)
@@ -263,13 +232,26 @@ struct PodMeterRow: View {
                         .frame(width: Fmt.remaining(pctLeft: window.pctLeft) * geo.size.width)
                 }
             }
-            .frame(height: 3)
-            Text(Fmt.glancePercent(pctLeft: window.pctLeft))
-                .font(Theme.label(10))
-                .foregroundStyle(isLead ? Theme.text : Theme.muted)
+            .frame(height: 4)
+            Text(Fmt.glancePercent(pctLeft: window.pctLeft) + "%")
+                .font(Theme.mono(11, weight: isPressured ? .semibold : .regular))
+                .foregroundStyle(isPressured ? Theme.severity(pctLeft: window.pctLeft) : Theme.text)
                 .monospacedDigit()
-                .frame(width: 20, alignment: .trailing)
+                .frame(width: 40, alignment: .trailing)
+            Text(resetText)
+                .font(Theme.label(10))
+                .foregroundStyle(Theme.faint)
+                .frame(width: 132, alignment: .trailing)
+                .lineLimit(1)
         }
+        .padding(.leading, 14)
+    }
+
+    /// A day and a clock time rather than a countdown: you are deciding whether
+    /// to wait, which is a question about when, not about how long.
+    private var resetText: String {
+        guard let reset = window.resetsAt else { return "no reset reported" }
+        return "resets \(Fmt.dayClock(reset, now: now))"
     }
 }
 

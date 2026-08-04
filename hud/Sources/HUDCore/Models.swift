@@ -55,6 +55,10 @@ public struct Subscription: Codable, Equatable, Identifiable {
     /// organization and were collapsed into this entry. Empty for Codex, and for
     /// a reading the daemon could not attribute.
     public let trees: [String]
+    /// When these numbers were last true. Claude is re-read every few minutes;
+    /// Codex is only as fresh as the last Codex turn, which can be days ago, so
+    /// this is what stops an old percentage being shown as a current one.
+    public let readAt: Date?
     public let windows: [Window]
     public let tightest: Window?
     public let stale: String?        // null, or a reason string
@@ -62,6 +66,7 @@ public struct Subscription: Codable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, provider, label, trees, windows, tightest, stale
+        case readAt = "read_at"
         case activeAgents = "active_agents"
     }
 
@@ -70,6 +75,7 @@ public struct Subscription: Codable, Equatable, Identifiable {
         provider: String,
         label: String,
         trees: [String] = [],
+        readAt: Date? = nil,
         windows: [Window],
         tightest: Window?,
         stale: String?,
@@ -79,6 +85,7 @@ public struct Subscription: Codable, Equatable, Identifiable {
         self.provider = provider
         self.label = label
         self.trees = trees
+        self.readAt = readAt
         self.windows = windows
         self.tightest = tightest
         self.stale = stale
@@ -93,6 +100,10 @@ public struct Subscription: Codable, Equatable, Identifiable {
         // Absent on a snapshot written before subscriptions were keyed on the
         // organization, so decode it leniently rather than failing the whole read.
         trees = try c.decodeIfPresent([String].self, forKey: .trees) ?? []
+        // Absent on a snapshot from a daemon that predates it. Unknown age is
+        // not the same as fresh, but it is also not something to accuse the
+        // reading of, so it simply goes unstated.
+        readAt = try? c.decodeIfPresent(Date.self, forKey: .readAt)
         windows = try c.decode([Window].self, forKey: .windows)
         tightest = try c.decodeIfPresent(Window.self, forKey: .tightest)
         stale = try c.decodeIfPresent(String.self, forKey: .stale)

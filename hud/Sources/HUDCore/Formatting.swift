@@ -4,19 +4,14 @@ import Foundation
 // `now`, so the unit tests can pin the clock and the views stay dumb.
 public enum Fmt {
 
-    /// Consumed fraction of a limit, in 0...1, from percent remaining.
-    /// A null reading is treated as nothing consumed (empty ring/bar).
-    public static func consumed(pctLeft: Int?) -> Double {
-        guard let pct = pctLeft else { return 0 }
-        let clamped = min(100, max(0, pct))
-        return Double(100 - clamped) / 100.0
-    }
-
-    /// Remaining fraction of a limit, in 0...1, from percent remaining. This is
-    /// the fill for the menu-bar glance's micro fuel-bar, which reads as a fuel
-    /// gauge (a short bar means little left), so it matches its own number
-    /// rather than the popover meters, which fill by `consumed`. A null reading
-    /// is treated as empty.
+    /// Remaining fraction of a limit, in 0...1, from percent remaining.
+    ///
+    /// The one fill direction in this app: every bar and every ring reads as a
+    /// fuel gauge, so a short bar or a bare ring always means little left. There
+    /// used to be a `consumed` counterpart for the rings, which meant the same
+    /// quantity ran in opposite directions in two places on one screen.
+    ///
+    /// A null reading is treated as empty.
     public static func remaining(pctLeft: Int?) -> Double {
         guard let pct = pctLeft else { return 0 }
         return Double(min(100, max(0, pct))) / 100.0
@@ -26,43 +21,6 @@ public enum Fmt {
     /// No "%": the fuel bar beneath already reads it as a proportion.
     public static func glancePercent(pctLeft: Int?) -> String {
         pctLeft.map(String.init) ?? "--"
-    }
-
-    /// Compact time-until-reset from now, per the design's countdown ladder:
-    ///   < 1h   -> "37m"
-    ///   < 1d   -> "2h06"   (hours, then zero-padded minutes)
-    ///   < 7d   -> "6d22h"  (days, then hours)
-    ///   >= 7d  -> "Jul 24" (a plain reset date; too far out to count down)
-    /// A reset that is already in the past reads "0m".
-    public static func countdown(to resetsAt: Date, now: Date = Date()) -> String {
-        let seconds = resetsAt.timeIntervalSince(now)
-        if seconds <= 0 { return "0m" }
-
-        let totalMinutes = Int(seconds / 60)
-        let totalHours = Int(seconds / 3600)
-        let totalDays = Int(seconds / 86_400)
-
-        if totalHours < 1 {
-            return "\(max(1, totalMinutes))m"
-        }
-        if totalDays < 1 {
-            let hours = totalHours
-            let minutes = totalMinutes - hours * 60
-            return "\(hours)h\(String(format: "%02d", minutes))"
-        }
-        if totalDays < 7 {
-            let days = totalDays
-            let hours = totalHours - days * 24
-            return "\(days)d\(hours)h"
-        }
-        return dateLabel(resetsAt)
-    }
-
-    /// A far-out reset date rendered like "Jul 24" in the user's locale.
-    public static func dateLabel(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "MMM d"
-        return f.string(from: date)
     }
 
     /// Wall-clock time like "11:47a" / "9:41a" used in status and pace lines.
@@ -130,13 +88,6 @@ public enum Fmt {
     /// being compared against each other and rounding hides the difference.
     public static func usdExact(_ amount: Double) -> String {
         String(format: "$%.2f", amount)
-    }
-
-    /// The right-aligned meter value, e.g. "74% · 1h12".
-    public static func meterValue(pctLeft: Int?, resetsAt: Date?, now: Date = Date()) -> String {
-        let pctPart = pctLeft.map { "\($0)%" } ?? "--%"
-        guard let reset = resetsAt else { return pctPart }
-        return "\(pctPart) · \(countdown(to: reset, now: now))"
     }
 
     /// A US-dollar readout for the value tiles, e.g. "$182" or "$4.1k".

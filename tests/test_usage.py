@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from helpers import write_claude_tree
+from helpers import _write_jsonl, write_claude_tree
 
 
 # ---------------------------------------------------------------- usage
@@ -572,3 +572,63 @@ def test_keychain_write_round_trips_a_quoted_payload(monkeypatch: pytest.MonkeyP
     assert '\\"' in line and "\\\\" in line  # quotes and backslashes escaped for the tool
 
 
+
+
+def test_a_codex_reading_falls_back_to_the_rollout_mtime_without_an_event_timestamp(tmp_path: Path):
+    """Codex has no API to ask, so its numbers are exactly as old as the file a
+    turn last wrote. That age has to travel with the reading, or a percentage
+    from three days ago is drawn like one from three minutes ago."""
+    import os
+    from usage import fetch_codex_usage
+
+    root = tmp_path / "codex"
+    rollout = root / "sessions" / "2026" / "07" / "30" / "rollout-2026-07-30T10-00-00-abc.jsonl"
+    _write_jsonl(rollout, [
+        {"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
+            "primary": {"window_minutes": 10080, "used_percent": 19.0, "resets_at": None},
+        }}},
+    ])
+    stamp = time.time() - 3 * 86400
+    os.utime(rollout, (stamp, stamp))
+
+    usage = fetch_codex_usage(root=root)
+    assert usage.error is None
+    assert usage.windows and usage.windows[0].pct == 19.0
+    assert usage.read_at is not None
+    assert abs(usage.read_at.timestamp() - stamp) < 2
+
+
+def test_codex_usage_uses_the_newest_rate_limit_event_not_the_newest_file(tmp_path: Path):
+    """Another active session can touch a file after a newer rate-limit event
+    was written elsewhere. File mtime would turn that unrelated write into a
+    false 100%-remaining reading, so event time decides when it exists."""
+    import os
+    from usage import fetch_codex_usage
+
+    root = tmp_path / "codex"
+    newer_event = root / "sessions" / "2026" / "08" / "04" / "rollout-current.jsonl"
+    later_file_write = root / "sessions" / "2026" / "08" / "04" / "rollout-other-session.jsonl"
+    _write_jsonl(newer_event, [
+        {"timestamp": "2026-08-04T20:47:37.575Z", "type": "event_msg", "payload": {
+            "type": "token_count", "rate_limits": {
+                "plan_type": "pro",
+                "primary": {"window_minutes": 10080, "used_percent": 38.0, "resets_at": None},
+            },
+        }},
+    ])
+    _write_jsonl(later_file_write, [
+        {"timestamp": "2026-08-04T20:46:55.957Z", "type": "event_msg", "payload": {
+            "type": "token_count", "rate_limits": {
+                "plan_type": "pro",
+                "primary": {"window_minutes": 10080, "used_percent": 0.0, "resets_at": None},
+            },
+        }},
+    ])
+    now = time.time()
+    os.utime(newer_event, (now - 60, now - 60))
+    os.utime(later_file_write, (now, now))
+
+    usage = fetch_codex_usage(root=root)
+    assert usage.windows and usage.windows[0].pct == 38.0
+    assert usage.read_at is not None
+    assert usage.read_at.isoformat() == "2026-08-04T20:47:37.575000+00:00"

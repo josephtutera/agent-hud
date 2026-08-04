@@ -20,18 +20,31 @@ final class HUDViewTests: XCTestCase {
     private let fable = Window(kind: "weekly_fable", pctLeft: 12, resetsAt: nil, pace: nil)
     private let codexWeekly = Window(kind: "weekly", pctLeft: 43, resetsAt: nil, pace: nil)
 
-    func testNotchRingsAreSessionWeeklyFableForClaude() {
-        let rings = sub(windows: [session, weekly, fable]).notchRings
+    func testGlanceRingsAreSessionWeeklyFableForClaude() {
+        let rings = sub(windows: [session, weekly, fable]).glanceRings
         XCTAssertEqual(rings.count, 3)
         XCTAssertEqual(rings[0]?.kind, "session_5h")
         XCTAssertEqual(rings[1]?.kind, "weekly_7d")
         XCTAssertEqual(rings[2]?.kind, "weekly_fable")
     }
 
-    func testNotchRingsDropFableRingWhenAbsent() {
-        let rings = sub(windows: [session, codexWeekly]).notchRings
+    func testGlanceRingsDropFableRingWhenAbsent() {
+        let rings = sub(windows: [session, codexWeekly]).glanceRings
         XCTAssertEqual(rings.count, 2)
         XCTAssertEqual(rings[1]?.kind, "weekly")
+    }
+
+    func testGlanceRingsDrawOnlyTheWindowsAPlanHas() {
+        // Codex reports one weekly limit and no session. Padding that out to a
+        // hollow outer ring would read as a limit it had spent nothing of.
+        let rings = sub(windows: [codexWeekly]).glanceRings
+        XCTAssertEqual(rings.count, 1)
+        XCTAssertEqual(rings[0]?.kind, "weekly")
+        XCTAssertFalse(rings.contains { $0 == nil })
+    }
+
+    func testGlanceRingsAreEmptyForASubscriptionReportingNothing() {
+        XCTAssertEqual(sub(windows: []).glanceRings.count, 0)
     }
 
     func testWeekly7dNeverReturnsFable() {
