@@ -80,7 +80,7 @@ python3 -m pytest tests         # the daemon: collectors, usage, pricing, snapsh
 | Path | What it is |
 |---|---|
 | `serve.py` | the daemon: polling, snapshot assembly, atomic write, loopback HTTP |
-| `usage.py` | Claude usage over OAuth (with Keychain token refresh and 429 backoff), Codex from its newest rollout rate-limit event, OpenCode spend |
+| `usage.py` | Claude usage over OAuth (with Keychain token refresh and 429 backoff), Codex from its newest account-wide rollout rate-limit event, OpenCode spend |
 | `pricing.py` | what the same usage would have cost at published API rates |
 | `agents.py` / `activity.py` | which agent sessions are running, and what each is doing |
 | `subscriptions.py` | which Claude organizations this machine is signed into, and what to call them |
@@ -151,7 +151,7 @@ all-clear.
 | a locked Keychain | same, with `unlock Keychain or sign in to Claude Code` |
 | the usage endpoint rate-limiting us | exponential backoff from 2 to 15 minutes, and the pod says `rate limited · retry 4m` |
 | the network | the reading is not cached, so the next poll retries; the pod shows the last-good numbers with the reason |
-| Codex figures going old | Codex has no API — its numbers come from the newest rate-limit event written by a turn — so the reading carries `read_at`, and a pod older than 10 minutes says `as of 3d ago` |
+| Codex figures going old | Codex has no API — its numbers come from the newest account-wide rate-limit event written by a turn — so the reading carries `read_at`, and a pod older than 10 minutes says `as of 3d ago` |
 | the daemon dying | the app notices it has no snapshot and restarts it, backing off from 15 seconds to 5 minutes so a port held by something else cannot cause a spawn loop |
 | `check-setup.sh` being absent, old, slow or broken | the setup block is omitted and the card says **setup unknown**, never a false all-clear |
 
