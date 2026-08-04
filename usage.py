@@ -7,8 +7,8 @@
   token on disk. We renew it here from the stored refresh token and write the
   result back, which keeps both tools on one credential.
 - Codex: rate_limit snapshots embedded in local rollout files; the newest
-  rate-limit event wins. No API call needed, but data is only as fresh as your
-  last Codex turn.
+  account-wide rate-limit event wins. No API call needed, but data is only as
+  fresh as your last Codex turn.
 - OpenCode: no subscription quota (BYOK), so we report 7-day API spend from
   its local database instead.
 """
@@ -537,6 +537,7 @@ def fetch_codex_usage(root: Path | None = None, scan: int = 40) -> ToolUsage:
         return ToolUsage(tool="codex", error="no codex sessions found")
     files = sorted(sessions_dir.glob("**/rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:scan]
     latest: tuple[datetime, dict] | None = None
+    account_latest: tuple[datetime, dict] | None = None
     for path in files:
         fallback_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
         try:
@@ -556,8 +557,16 @@ def fetch_codex_usage(root: Path | None = None, scan: int = 40) -> ToolUsage:
                             event_at = event_at.replace(tzinfo=timezone.utc)
                         if latest is None or event_at > latest[0]:
                             latest = (event_at, rl)
+                        # Codex can emit a model-specific limit alongside the
+                        # account-wide one. The HUD has one Codex subscription,
+                        # so it must show the account limit when it is present.
+                        if rl.get("limit_id") == "codex" and (
+                            account_latest is None or event_at > account_latest[0]
+                        ):
+                            account_latest = (event_at, rl)
         except OSError:
             continue
+    latest = account_latest or latest
     if latest is None:
         return ToolUsage(tool="codex", error="no rate-limit data yet")
 

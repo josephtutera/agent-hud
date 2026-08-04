@@ -632,3 +632,33 @@ def test_codex_usage_uses_the_newest_rate_limit_event_not_the_newest_file(tmp_pa
     assert usage.windows and usage.windows[0].pct == 38.0
     assert usage.read_at is not None
     assert usage.read_at.isoformat() == "2026-08-04T20:47:37.575000+00:00"
+
+
+def test_codex_usage_prefers_the_account_limit_over_a_newer_model_limit(tmp_path: Path):
+    """A model-specific limit is not the account-wide Codex quota shown in the HUD."""
+    from usage import fetch_codex_usage
+
+    root = tmp_path / "codex"
+    account = root / "sessions" / "2026" / "08" / "04" / "rollout-account.jsonl"
+    model = root / "sessions" / "2026" / "08" / "04" / "rollout-model.jsonl"
+    _write_jsonl(account, [
+        {"timestamp": "2026-08-04T21:08:57.263Z", "type": "event_msg", "payload": {
+            "type": "token_count", "rate_limits": {
+                "plan_type": "pro", "limit_id": "codex",
+                "primary": {"window_minutes": 10080, "used_percent": 39.0, "resets_at": None},
+            },
+        }},
+    ])
+    _write_jsonl(model, [
+        {"timestamp": "2026-08-04T21:18:58.050Z", "type": "event_msg", "payload": {
+            "type": "token_count", "rate_limits": {
+                "plan_type": "pro", "limit_id": "codex_bengalfox",
+                "primary": {"window_minutes": 10080, "used_percent": 0.0, "resets_at": None},
+            },
+        }},
+    ])
+
+    usage = fetch_codex_usage(root=root)
+    assert usage.windows and usage.windows[0].pct == 39.0
+    assert usage.read_at is not None
+    assert usage.read_at.isoformat() == "2026-08-04T21:08:57.263000+00:00"
