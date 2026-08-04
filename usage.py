@@ -6,8 +6,9 @@
   makes a call of its own, so an account you haven't touched today has a dead
   token on disk. We renew it here from the stored refresh token and write the
   result back, which keeps both tools on one credential.
-- Codex: rate_limit snapshots embedded in local rollout files; the newest one
-  wins. No API call needed, but data is only as fresh as your last Codex turn.
+- Codex: rate_limit snapshots embedded in local rollout files; the newest
+  rate-limit event wins. No API call needed, but data is only as fresh as your
+  last Codex turn.
 - OpenCode: no subscription quota (BYOK), so we report 7-day API spend from
   its local database instead.
 """
@@ -535,49 +536,55 @@ def fetch_codex_usage(root: Path | None = None, scan: int = 40) -> ToolUsage:
     if not sessions_dir.is_dir():
         return ToolUsage(tool="codex", error="no codex sessions found")
     files = sorted(sessions_dir.glob("**/rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:scan]
+    latest: tuple[datetime, dict] | None = None
     for path in files:
-        latest = None
+        fallback_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
         try:
             with path.open(encoding="utf-8", errors="replace") as fh:
                 for line in fh:
                     if '"rate_limits"' not in line:
                         continue
                     try:
-                        payload = json.loads(line).get("payload") or {}
+                        event = json.loads(line)
                     except ValueError:
                         continue
+                    payload = event.get("payload") or {}
                     rl = payload.get("rate_limits")
                     if isinstance(rl, dict):
-                        latest = rl
+                        event_at = _parse_ts(event.get("timestamp")) or fallback_at
+                        if event_at.tzinfo is None:
+                            event_at = event_at.replace(tzinfo=timezone.utc)
+                        if latest is None or event_at > latest[0]:
+                            latest = (event_at, rl)
         except OSError:
             continue
-        if latest is None:
+    if latest is None:
+        return ToolUsage(tool="codex", error="no rate-limit data yet")
+
+    read_at, rate_limits = latest
+    windows = []
+    for key in ("secondary", "primary"):  # show the short window first
+        data = rate_limits.get(key)
+        if not isinstance(data, dict):
             continue
-        windows = []
-        for key in ("secondary", "primary"):  # show the short window first
-            data = latest.get(key)
-            if not isinstance(data, dict):
-                continue
-            resets = data.get("resets_at")
-            windows.append(
-                UsageWindow(
-                    label=_window_label(data.get("window_minutes")),
-                    pct=data.get("used_percent"),
-                    resets_at=datetime.fromtimestamp(resets, tz=timezone.utc) if resets else None,
-                )
+        resets = data.get("resets_at")
+        windows.append(
+            UsageWindow(
+                label=_window_label(data.get("window_minutes")),
+                pct=data.get("used_percent"),
+                resets_at=datetime.fromtimestamp(resets, tz=timezone.utc) if resets else None,
             )
-        # Codex writes these numbers into a rollout file as a side effect of a
-        # turn, so the file's mtime is when they were last true. There is no API
-        # to ask, which is exactly why the age has to travel with the reading.
-        age = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-        return ToolUsage(
-            tool="codex",
-            plan=(latest.get("plan_type") or "").title(),
-            windows=windows,
-            read_at=age,
-            note=f"as of {age.astimezone().strftime('%b %d %-I:%M %p')}",
         )
-    return ToolUsage(tool="codex", error="no rate-limit data yet")
+    # A rollout file can be touched by another active session after this event,
+    # so its mtime does not say which quota snapshot is newest. Codex records
+    # the event time itself; old rollouts without that field fall back to mtime.
+    return ToolUsage(
+        tool="codex",
+        plan=(rate_limits.get("plan_type") or "").title(),
+        windows=windows,
+        read_at=read_at,
+        note=f"as of {read_at.astimezone().strftime('%b %d %-I:%M %p')}",
+    )
 
 
 # ---------------------------------------------------------------- opencode
