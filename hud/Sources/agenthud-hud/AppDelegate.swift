@@ -17,6 +17,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Redraws it when the menu bar changes appearance, which the snapshot knows
     /// nothing about.
     private var appearanceObserver: NSKeyValueObservation?
+    /// The appearance the glance currently on screen was drawn for. What the
+    /// observer above compares against, so that the redraw AppKit provokes by
+    /// accepting an image does not provoke another one — see `GlanceRedraw`.
+    private var renderedIsDark: Bool?
     /// Mouse monitors that collapse the card on a click outside it. Only alive
     /// while the card is open.
     private var dismissMonitors: [Any] = []
@@ -43,8 +47,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             // The glance draws in real color, so it does not get AppKit's tint
             // for free and has to be redrawn when the bar flips light or dark.
+            // Only then, though: this key fires constantly, including once per
+            // image we hand over, so redrawing on every notification is a loop
+            // that never stops running.
             appearanceObserver = button.observe(\.effectiveAppearance) { [weak self] _, _ in
-                Task { @MainActor in self?.renderGlance() }
+                Task { @MainActor in self?.renderGlanceIfAppearanceChanged() }
             }
         }
 
@@ -110,7 +117,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func renderGlance() {
         guard let button = statusItem?.button else { return }
         let appearance = button.effectiveAppearance
-        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let isDark = GlanceRedraw.isDark(appearance)
+        renderedIsDark = isDark
 
         let glance = MenuBarContentView(
             snapshot: store.snapshot,
@@ -134,6 +142,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         image.isTemplate = false
         button.image = image
         button.imagePosition = .imageOnly
+    }
+
+    /// The appearance observer's entry point: redraw only when the bar has
+    /// actually flipped light or dark since the glance on screen was drawn.
+    ///
+    /// Setting `button.image` at the end of `renderGlance` makes AppKit
+    /// re-resolve this key, so an unconditional redraw here feeds itself — the
+    /// bug this guard exists for. See `GlanceRedraw`.
+    private func renderGlanceIfAppearanceChanged() {
+        guard let button = statusItem?.button else { return }
+        guard GlanceRedraw.isNeeded(
+            observedIsDark: GlanceRedraw.isDark(button.effectiveAppearance),
+            renderedIsDark: renderedIsDark
+        ) else { return }
+        renderGlance()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -279,3 +302,4 @@ private struct CardHost: View {
         .padding(10)
     }
 }
+
