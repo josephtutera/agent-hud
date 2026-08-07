@@ -22,7 +22,7 @@ extension HUDSnapshot {
             id: "claude-team",
             provider: "claude",
             label: "Claude Team",
-            trees: ["~/.claude-team"],
+            trees: ["cswap:team"],
             readAt: at(-2),
             windows: [
                 Window(kind: "session_5h", pctLeft: 18, resetsAt: at(126),
@@ -37,7 +37,10 @@ extension HUDSnapshot {
             id: "claude-max",
             provider: "claude",
             label: "Claude Max",
-            trees: ["~/.claude"],
+            // The default tree plus this account's own cswap profile: one
+            // organization reached two ways, and the one currently signed in.
+            trees: ["~/.claude", "cswap:personal"],
+            active: true,
             readAt: at(-2),
             windows: [
                 Window(kind: "session_5h", pctLeft: 74, resetsAt: at(72), pace: nil),
@@ -52,6 +55,7 @@ extension HUDSnapshot {
             id: "codex",
             provider: "codex",
             label: "Codex Pro",
+            active: true,
             // Deliberately old: Codex only updates when you use Codex, so this
             // is its normal state after a quiet day and the pod must say so.
             readAt: at(-3 * 24 * 60),
