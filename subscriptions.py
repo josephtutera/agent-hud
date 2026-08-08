@@ -101,6 +101,12 @@ class ClaudeProfile:
     # session profiles. Names the row, since the profile's own directory is a
     # slot number and a mangled email that mean nothing on a card.
     cswap_alias: str = ""
+    # Whether this is one of claude-swap's session profiles at all. Separate from
+    # the alias, which is only set when an account has been given one: a slot
+    # with no alias is still cswap's, and it is cswap that holds its credential,
+    # so anything that asks "where does this account's usage come from" has to
+    # key on this rather than on a name that may not exist.
+    cswap: bool = False
     # How this tree is worth naming on screen, resolved against the home it was
     # discovered under rather than against the process's own, so a snapshot built
     # for one home never prints paths from another.
@@ -214,7 +220,7 @@ def claude_profiles(home: Path | None = None) -> list[ClaudeProfile]:
     profiles."""
     home = Path(home) if home else Path.home()
     profiles: list[ClaudeProfile] = []
-    for config_dir, default, alias in _config_dirs(home):
+    for config_dir, default, alias, cswap in _config_dirs(home):
         org = _org_for(config_dir, default, home)
         profiles.append(
             ClaudeProfile(
@@ -223,6 +229,7 @@ def claude_profiles(home: Path | None = None) -> list[ClaudeProfile]:
                 default=default,
                 org=org,
                 cswap_alias=alias,
+                cswap=cswap,
                 display=_display_path(config_dir, home, alias),
             )
         )
@@ -256,25 +263,26 @@ def _cswap_profile_dirs(home: Path) -> list[tuple[Path, str]]:
     return []
 
 
-def _config_dirs(home: Path) -> list[tuple[Path, bool, str]]:
-    """(tree, is_default, cswap alias) for every config tree, default first.
+def _config_dirs(home: Path) -> list[tuple[Path, bool, str, bool]]:
+    """(tree, is_default, cswap alias, is a cswap profile) for every config tree,
+    default first.
 
     A machine with no `~/.claude` at all still yields it, so callers always have
     something to report against rather than an empty list.
     """
     default = home / ".claude"
-    dirs: list[tuple[Path, bool, str]] = []
+    dirs: list[tuple[Path, bool, str, bool]] = []
     if default.is_dir():
-        dirs.append((default, True, ""))
+        dirs.append((default, True, "", False))
     # `.claude-*` is also how claude-swap's own store is named, and its backup
     # root is a store rather than a login. Left in, it reports as a permanently
     # signed-out subscription called "swap-backup".
     reserved = {r.name for r in _CSWAP_ROOTS}
     for d in sorted(home.glob(".claude-*")):
         if d.is_dir() and d.name not in reserved:
-            dirs.append((d, False, ""))
-    dirs.extend((d, False, alias) for d, alias in _cswap_profile_dirs(home))
-    return dirs or [(default, True, "")]
+            dirs.append((d, False, "", False))
+    dirs.extend((d, False, alias, True) for d, alias in _cswap_profile_dirs(home))
+    return dirs or [(default, True, "", False)]
 
 
 def slug(text: str) -> str:

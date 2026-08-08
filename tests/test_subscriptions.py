@@ -276,3 +276,39 @@ def test_a_machine_with_no_cswap_is_unchanged(tmp_path: Path):
     subs = claude_subscriptions(claude_profiles(home=_machine(tmp_path)))
     assert [s.trees for s in subs] == [["~/.claude"], ["~/.claude-team"]]
     assert [s.active for s in subs] == [True, False]
+
+
+def test_a_cswap_profile_is_marked_as_one(tmp_path: Path):
+    """Which account's usage comes from cswap rather than from a credential on
+    disk turns on this flag, so a profile that is cswap's has to say so and the
+    default tree has to not."""
+    profiles = claude_profiles(home=_swapped_machine(tmp_path))
+    assert {p.tree: p.cswap for p in profiles} == {
+        "~/.claude": False,
+        "cswap:personal": True,
+        "cswap:team": True,
+    }
+
+
+def test_an_unaliased_slot_is_still_cswaps(tmp_path: Path):
+    """The reason this is a flag of its own rather than "has an alias": an
+    account nobody named is still one cswap holds the credential for, and reading
+    it as a plain tree sends the card looking for a credential that is not there.
+    """
+    write_claude_tree(tmp_path, ".claude", org_uuid=MAX_ORG, org_type="claude_max")
+    write_cswap_store(tmp_path, [
+        {"num": 1, "org_uuid": MAX_ORG, "org_name": "joseph@carepilot.com",
+         "org_type": "claude_max", "alias": ""},
+    ])
+    profile = next(p for p in claude_profiles(home=tmp_path) if not p.default)
+    assert profile.cswap_alias == ""
+    assert profile.cswap is True
+
+
+def test_a_sibling_tree_is_not_cswaps(tmp_path: Path):
+    """A hand-made `~/.claude-<name>` keeps its own credential, so it must keep
+    reading it rather than being asked of a switcher that never heard of it."""
+    write_claude_tree(tmp_path, ".claude", org_uuid=MAX_ORG, org_type="claude_max")
+    write_claude_tree(tmp_path, ".claude-work", org_uuid=TEAM_ORG, org_type="claude_team")
+    profile = next(p for p in claude_profiles(home=tmp_path) if not p.default)
+    assert profile.cswap is False

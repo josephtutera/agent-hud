@@ -18,6 +18,7 @@ from __future__ import annotations
 import getpass
 import hashlib
 import json
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -430,7 +431,141 @@ def _claude_usage_from_token(token: str, plan: str) -> ToolUsage:
     )
 
 
+# ------------------------------------------------- claude-swap as a source
+#
+# An account the machine is not signed into has no credential where this module
+# looks. claude-swap stashes it under a Keychain service of its own, and reading
+# that directly is the wrong fix: OAuth refresh tokens rotate on use, so two
+# tools renewing one account race, and whichever refreshes second finds the token
+# it holds already revoked. cswap already fetches, caches and rate-limits usage
+# per account and prints it as versioned JSON, so a stashed account is read from
+# the tool that owns it rather than around it.
+#
+# The cost is freshness: those numbers are as new as cswap's own cache, which is
+# why the reading carries `read_at` from cswap's stamp and the renderer can say
+# how old it is, the same way it already does for Codex.
+
+CSWAP_ROSTER_TTL_SECONDS = 60.0
+
+# The HUD runs from a launchd-launched app bundle, which inherits no shell
+# profile, so ~/.local/bin (where uv installs cswap) is not on PATH. Looking
+# only there is the same trap that had check-setup.sh reporting an installed
+# switcher as missing on a machine where both accounts were switching fine.
+_CSWAP_FALLBACK_PATHS = (
+    Path.home() / ".local/bin/cswap",
+    Path("/opt/homebrew/bin/cswap"),
+    Path("/usr/local/bin/cswap"),
+)
+
+_cswap_roster_cache: tuple[float, dict[str, dict]] = (0.0, {})
+
+
+def _cswap_binary() -> str | None:
+    found = shutil.which("cswap")
+    if found:
+        return found
+    for path in _CSWAP_FALLBACK_PATHS:
+        if path.is_file():
+            return str(path)
+    return None
+
+
+def _cswap_roster(force: bool = False) -> dict[str, dict]:
+    """cswap's accounts keyed by slot number, or {} when it can't be asked.
+
+    Cached briefly because one poll asks once per stashed profile, and each call
+    is a process launch that may in turn reach the usage API.
+    """
+    global _cswap_roster_cache
+    fetched_at, roster = _cswap_roster_cache
+    now = time.monotonic()
+    if not force and roster and now - fetched_at < CSWAP_ROSTER_TTL_SECONDS:
+        return roster
+
+    binary = _cswap_binary()
+    if binary is None:
+        return {}
+    try:
+        out = subprocess.run(
+            [binary, "list", "--json"], capture_output=True, text=True, timeout=20
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if out.returncode != 0:
+        return {}
+    try:
+        accounts = json.loads(out.stdout).get("accounts") or []
+    except ValueError:
+        return {}
+
+    roster = {str(a.get("number")): a for a in accounts if a.get("number") is not None}
+    if roster:
+        _cswap_roster_cache = (now, roster)
+    return roster
+
+
+def _cswap_slot(profile: ClaudeProfile) -> str:
+    """The slot a session profile belongs to. Its directory is `<slot>-<email>`,
+    which is how subscriptions.py already resolves the alias, so the two agree
+    by construction."""
+    return profile.config_dir.name.split("-", 1)[0]
+
+
+def _cswap_window(label: str, window: dict | None) -> UsageWindow | None:
+    if not isinstance(window, dict) or window.get("pct") is None:
+        return None
+    return UsageWindow(
+        label=label,
+        pct=float(window["pct"]),
+        resets_at=_parse_ts(window.get("resetsAt")),
+    )
+
+
+def _cswap_windows(usage: dict) -> list[UsageWindow]:
+    """cswap's windows in the order the card reads them: 5h, 7d, then whatever
+    model-scoped limits the plan carries (Fable on Max and Team)."""
+    windows = [
+        _cswap_window("5h", usage.get("fiveHour")),
+        _cswap_window("7d", usage.get("sevenDay")),
+    ]
+    for scoped in usage.get("scoped") or []:
+        if isinstance(scoped, dict):
+            # Lowercased to match what the direct reading produces from the API's
+            # display name, so one account's row cannot read "Fable" while
+            # another's reads "fable" purely because of where it was read.
+            name = str(scoped.get("name") or "scoped").lower()
+            windows.append(_cswap_window(name, scoped))
+    return [w for w in windows if w is not None]
+
+
+def _claude_usage_from_cswap(profile: ClaudeProfile) -> ToolUsage | None:
+    """One reading for a stashed account, or None when cswap has nothing to say
+    about it and the caller should fall back to reading a credential."""
+    account = _cswap_roster().get(_cswap_slot(profile))
+    if account is None:
+        return None
+    status = account.get("usageStatus")
+    if status and status != "ok":
+        # cswap knows the account and could not read it (an expired login of its
+        # own, a 429 it is sitting out). Reported as transient so the next poll
+        # retries, since the thing that heals it is cswap, not a human here.
+        return ToolUsage(tool="claude", error=f"claude-swap: {status}"[:60])
+    windows = _cswap_windows(account.get("usage") or {})
+    if not windows:
+        return None
+    # `plan` is deliberately left empty. serve.py treats a plan on a reading as
+    # evidence that contradicts the tree's own account file, and cswap reports
+    # the organization rather than the subscription type, so claiming one here
+    # would be a guess dressed as a credential.
+    return ToolUsage(
+        tool="claude",
+        windows=windows,
+        read_at=_parse_ts(account.get("usageFetchedAt")),
+    )
+
+
 SIGNED_OUT = "signed out · run claude auth login"
+NO_CSWAP_READING = "claude-swap has no reading for this account"
 
 
 def _refreshed_or_signed_out(creds: ClaudeCredentials) -> ClaudeCredentials:
@@ -444,6 +579,16 @@ def _read_claude_usage(profile: ClaudeProfile) -> ToolUsage:
     """One live reading for a profile, renewing the OAuth token when it needs
     it. Raises RateLimited or AuthExpired for the caller to turn into a
     cooldown; anything else comes back as a ToolUsage with .error set."""
+    # A claude-swap session profile holds no credential of its own, so asking for
+    # one and reporting what is missing was how the account this machine is not
+    # signed into came up as "unlock Keychain or sign in to Claude Code" while
+    # the Keychain was open and Claude Code was signed in. Ask its owner instead.
+    if profile.cswap:
+        usage = _claude_usage_from_cswap(profile)
+        if usage is not None:
+            return usage
+        raise AuthExpired(NO_CSWAP_READING)
+
     creds = _profile_credentials(profile)
     if creds is None:
         raise AuthExpired("unlock Keychain or sign in to Claude Code")
