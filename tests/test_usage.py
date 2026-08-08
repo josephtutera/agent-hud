@@ -13,6 +13,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from dataclasses import replace
+
 from helpers import _write_jsonl, write_claude_tree
 
 
@@ -662,3 +664,174 @@ def test_codex_usage_prefers_the_account_limit_over_a_newer_model_limit(tmp_path
     assert usage.windows and usage.windows[0].pct == 39.0
     assert usage.read_at is not None
     assert usage.read_at.isoformat() == "2026-08-04T21:08:57.263000+00:00"
+
+
+# ------------------------------------------------- claude-swap as a source
+#
+# The account this machine is NOT signed into keeps no credential where usage.py
+# looks for one: claude-swap holds it under a Keychain service of its own. That
+# is what had the Max card reading "unlock Keychain or sign in to Claude Code"
+# while the Keychain was open and Claude Code was signed in. These pin the fix,
+# which is to read that account from the tool that owns its credential.
+
+
+CSWAP_ACCOUNT = {
+    "number": 1,
+    "alias": "personal",
+    "active": False,
+    "usageStatus": "ok",
+    "usageFetchedAt": "2026-08-08T03:43:08Z",
+    "usage": {
+        "fiveHour": {"pct": 6.0, "resetsAt": "2026-08-08T07:10:00+00:00"},
+        "sevenDay": {"pct": 76.0, "resetsAt": "2026-08-11T16:00:00+00:00"},
+        "scoped": [{"name": "Fable", "pct": 91.0, "resetsAt": "2026-08-11T15:59:59+00:00"}],
+    },
+}
+
+
+@pytest.fixture
+def cswap_profile(monkeypatch: pytest.MonkeyPatch):
+    """A stashed cswap profile plus a stubbed roster, with both caches clean."""
+    import usage as usage_module
+    from usage import ClaudeProfile
+
+    usage_module._claude_cache.clear()
+    usage_module._cswap_roster_cache = (0.0, {})
+    profile = ClaudeProfile(
+        label="max",
+        config_dir=Path("/x/.claude-swap-backup/sessions/1-joseph_carepilot.com"),
+        cswap_alias="personal",
+        cswap=True,
+    )
+    yield profile, usage_module
+    usage_module._claude_cache.clear()
+    usage_module._cswap_roster_cache = (0.0, {})
+
+
+def _stub_roster(usage_module, monkeypatch, accounts: list[dict]) -> list[int]:
+    """Stand in for the `cswap list --json` process, counting the launches."""
+    launches = []
+
+    class Completed:
+        returncode = 0
+        stdout = json.dumps({"schemaVersion": 1, "accounts": accounts})
+
+    def fake_run(cmd, **kwargs):
+        launches.append(cmd)
+        return Completed()
+
+    monkeypatch.setattr(usage_module, "_cswap_binary", lambda: "/x/.local/bin/cswap")
+    monkeypatch.setattr(usage_module.subprocess, "run", fake_run)
+    return launches
+
+
+def test_stashed_account_reads_its_usage_from_claude_swap(cswap_profile, monkeypatch):
+    """The whole point: an account the machine is not signed into still shows
+    bars, and they are the numbers cswap holds for it."""
+    profile, usage_module = cswap_profile
+    _stub_roster(usage_module, monkeypatch, [CSWAP_ACCOUNT])
+
+    usage = usage_module.fetch_claude_usage_for(profile)
+
+    assert [(w.label, w.pct) for w in usage.windows] == [("5h", 6.0), ("7d", 76.0), ("fable", 91.0)]
+    assert usage.error is None
+
+
+def test_stashed_account_never_asks_for_a_credential(cswap_profile, monkeypatch):
+    """The regression. Reading a credential for a cswap profile finds nothing and
+    reports a locked Keychain, which was true of neither the Keychain nor the
+    login. It must not be consulted at all."""
+    profile, usage_module = cswap_profile
+    _stub_roster(usage_module, monkeypatch, [CSWAP_ACCOUNT])
+
+    def explode(_profile):
+        raise AssertionError("a cswap profile must not be asked for a credential")
+
+    monkeypatch.setattr(usage_module, "_profile_credentials", explode)
+    usage = usage_module.fetch_claude_usage_for(profile)
+
+    assert "Keychain" not in (usage.error or usage.stale or "")
+    assert usage.windows
+
+
+def test_stashed_account_is_stamped_with_when_cswap_read_it(cswap_profile, monkeypatch):
+    """cswap's numbers are as fresh as cswap's own cache, so the reading carries
+    its stamp rather than the moment the HUD happened to ask."""
+    profile, usage_module = cswap_profile
+    _stub_roster(usage_module, monkeypatch, [CSWAP_ACCOUNT])
+
+    usage = usage_module.fetch_claude_usage_for(profile)
+
+    assert usage.read_at is not None
+    assert usage.read_at.isoformat() == "2026-08-08T03:43:08+00:00"
+
+
+def test_stashed_account_claims_no_plan(cswap_profile, monkeypatch):
+    """serve.py reads a plan on a reading as credential evidence that overrides
+    the tree's own account file. cswap reports an organization, not a
+    subscription type, so claiming one here would fabricate that evidence."""
+    profile, usage_module = cswap_profile
+    _stub_roster(usage_module, monkeypatch, [CSWAP_ACCOUNT])
+
+    assert usage_module.fetch_claude_usage_for(profile).plan == ""
+
+
+def test_a_roster_is_fetched_once_for_a_whole_poll(cswap_profile, monkeypatch):
+    """One poll asks per stashed profile, and each ask is a process launch that
+    may reach the usage API, so they share one answer."""
+    profile, usage_module = cswap_profile
+    second = replace(profile, config_dir=Path(
+        "/x/.claude-swap-backup/sessions/2-joseph_carepilot.com"), label="team")
+    launches = _stub_roster(usage_module, monkeypatch, [
+        CSWAP_ACCOUNT, {**CSWAP_ACCOUNT, "number": 2, "alias": "team"}])
+
+    usage_module.fetch_claude_usages([profile, second])
+
+    assert len(launches) == 1
+
+
+def test_a_slot_cswap_cannot_read_is_reported_as_transient(cswap_profile, monkeypatch):
+    """cswap knowing the account and failing to read it is cswap's to heal, so
+    the next poll retries rather than blaming a Keychain nobody locked."""
+    profile, usage_module = cswap_profile
+    _stub_roster(usage_module, monkeypatch, [{**CSWAP_ACCOUNT, "usageStatus": "expired"}])
+
+    usage = usage_module.fetch_claude_usage_for(profile)
+
+    assert "claude-swap" in (usage.error or usage.stale)
+    assert "Keychain" not in (usage.error or usage.stale)
+
+
+def test_a_slot_cswap_does_not_know_says_so(cswap_profile, monkeypatch):
+    """A profile directory with no matching slot is not a credential problem
+    either, and saying it is sends someone to unlock a Keychain that is open."""
+    profile, usage_module = cswap_profile
+    _stub_roster(usage_module, monkeypatch, [{**CSWAP_ACCOUNT, "number": 9}])
+
+    usage = usage_module.fetch_claude_usage_for(profile)
+
+    assert (usage.error or usage.stale) == usage_module.NO_CSWAP_READING
+
+
+def test_cswap_is_found_off_path(cswap_profile, monkeypatch, tmp_path: Path):
+    """The HUD runs from a launchd-launched app bundle, which inherits no shell
+    profile, so ~/.local/bin is not on PATH. Looking only there is what made
+    check-setup.sh report an installed switcher as missing."""
+    profile, usage_module = cswap_profile
+    installed = tmp_path / "cswap"
+    installed.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(usage_module.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(usage_module, "_CSWAP_FALLBACK_PATHS", (installed,))
+
+    assert usage_module._cswap_binary() == str(installed)
+
+
+def test_a_tree_that_is_not_cswaps_still_reads_its_own_credential(usage_probe):
+    """A sibling tree, or a machine that never heard of claude-swap, is untouched
+    by any of this."""
+    import usage as usage_module
+
+    profile, probe = usage_probe
+    assert profile.cswap is False
+    usage_module.fetch_claude_usage_for(profile)
+    assert probe.calls == 1

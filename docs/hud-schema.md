@@ -6,9 +6,10 @@ every meaningful change and served over a loopback HTTP API. This document is th
 contract for the Swift HUD app: the field names below are frozen and will not be
 renamed.
 
-**v2** added the `setup` block, and later `subscriptions[].read_at` and
-`subscriptions[].trees`. Everything from v1 is unchanged, and every field added
-since is optional on the reading side, so an older snapshot still decodes.
+**v2** added the `setup` block, and later `subscriptions[].read_at`,
+`subscriptions[].trees`, and `subscriptions[].active`. Everything from v1 is
+unchanged, and every field added since is optional on the reading side, so an
+older snapshot still decodes.
 
 ## Serving it
 
@@ -69,7 +70,8 @@ Run it with `agenthud serve` (or `agenthud --serve`), optionally with `--host` a
   "id": "claude-team",
   "provider": "claude",
   "label": "Claude Team",
-  "trees": ["~/.claude-team"],
+  "trees": ["cswap:team"],
+  "active": false,
   "read_at": "2026-08-02T21:38:04+00:00",
   "windows": [ ... ],
   "tightest": { "kind": "session_5h", "pct_left": 62, "resets_at": "..." } | null,
@@ -102,6 +104,7 @@ off the readout at the moment its quota is most worth seeing.
 | `provider` | `"claude"` \| `"codex"` | Which vendor this subscription is. |
 | `label` | string | Display name, e.g. `Claude Max`, `Claude Team`, `Claude Team (CarePilot)`, `Codex Pro`. |
 | `trees` | array of strings | The config trees signed into this subscription, e.g. `["~/.claude", "~/.claude-work"]`. More than one means they were collapsed into this entry. Empty for Codex, and for a reading the daemon could not attribute to a tree. |
+| `active` | bool | Whether a session started right now with no account named would spend this subscription. Exactly one Claude subscription is active at a time: claude-swap switches accounts by rewriting `~/.claude`, so this moves as it swaps and is the only field that says which plan is currently paying. Always `true` for Codex, which has one login and no switcher. `false` for a reading the daemon could not attribute to a tree, since an unattributed reading cannot be shown to be the live one. Absent in snapshots from a daemon older than this field; decode it as `false`. |
 | `read_at` | ISO8601 string, or null | When these numbers were last **true** — not when the snapshot was built. Claude is re-read on the usage poll, so this tracks it closely. Codex has no API to ask: its figures come out of a rollout file written as a side effect of a turn. The daemon uses the newest account-wide rate-limit event timestamp, falling back to the file mtime only for older event records that did not carry a timestamp, so a model-specific limit or another active session cannot overwrite the subscription reading. A reader must treat an old `read_at` as a reason to say so, because a weekly window that has since reset makes an old percentage wrong rather than merely late. `null` when the reading carries no timestamp (an older daemon, or a subscription with no successful read yet). |
 | `windows` | array | The usage windows this subscription reports (see below). |
 | `tightest` | object or null | The window with the least headroom (lowest `pct_left`), copied out for quick access. `null` when no window has a percentage. Carries `kind`, `pct_left`, `resets_at`. |
